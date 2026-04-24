@@ -2,8 +2,8 @@ name: AM4 God Bot — 24/7 Auto Player
 
 on:
   schedule:
-    # Run every 20 minutes, 24/7
-    - cron: '*/20 * * * *'
+    # Run every 05 minutes, 24/7
+    - cron: '*/05 * * * *'
   workflow_dispatch: # Manual trigger button
 
 jobs:
