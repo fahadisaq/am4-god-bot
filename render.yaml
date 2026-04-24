@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: am4-god-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: AM4_EMAIL
+        sync: false
+      - key: AM4_PASSWORD
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: HEADLESS
+        value: true
+      - key: FUEL_THRESHOLD
+        value: 500
+      - key: CO2_THRESHOLD
+        value: 120

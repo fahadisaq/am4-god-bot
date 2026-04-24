@@ -1,0 +1,47 @@
+name: AM4 God Bot — 24/7 Auto Player
+
+on:
+  schedule:
+    # Run every 20 minutes, 24/7
+    - cron: '*/20 * * * *'
+  workflow_dispatch: # Manual trigger button
+
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chrome dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libdrm2 \
+            libxkbcommon0 \
+            libgbm1 \
+            libasound2 \
+            libatspi2.0-0 \
+            libxshmfence1
+
+      - name: Run AM4 Bot Cycle
+        env:
+          AM4_EMAIL: ${{ secrets.AM4_EMAIL }}
+          AM4_PASSWORD: ${{ secrets.AM4_PASSWORD }}
+          FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '500' }}
+          CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '120' }}
+          MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
+        run: node src/quickrun.js

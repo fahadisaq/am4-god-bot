@@ -1,0 +1,18 @@
+{
+  "name": "am4-god-bot",
+  "version": "2.0.0",
+  "description": "God-level Airline Manager 4 bot — runs 24/7 on cloud with web dashboard",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "puppeteer": "^23.0.0",
+    "express": "^4.21.0",
+    "dotenv": "^16.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
