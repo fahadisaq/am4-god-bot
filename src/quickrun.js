@@ -82,53 +82,109 @@ async function main() {
       waitUntil: 'networkidle2',
       timeout: 30000,
     });
+    await sleep(3000);
+
+    // Log current page state for debugging
+    const pageTitle = await page.title();
+    const pageUrl = page.url();
+    log('🔑', 'LOGIN', `Page: "${pageTitle}" at ${pageUrl}`);
+
+    // Dismiss cookie consent if present
+    await page.evaluate(() => {
+      const cookieBtns = document.querySelectorAll('button, a, div');
+      for (const el of cookieBtns) {
+        const text = (el.textContent || '').toLowerCase();
+        if (text.includes('accept') || text.includes('agree') || text.includes('consent') || text.includes('got it')) {
+          el.click();
+          break;
+        }
+      }
+    });
+    await sleep(1000);
+
+    // Click ALL possible login/sign-in buttons on landing page
+    log('🔑', 'LOGIN', 'Looking for login button...');
+    await page.evaluate(() => {
+      // Try clicking buttons with login-related text
+      const allClickables = document.querySelectorAll('button, a, div[onclick], span[onclick]');
+      for (const el of allClickables) {
+        const text = (el.textContent || '').toLowerCase().trim();
+        if (text === 'login' || text === 'log in' || text === 'sign in' ||
+            text.includes('existing') || text === 'play now') {
+          el.click();
+          return;
+        }
+      }
+      // Specific AM4 landing page button indices from original bot
+      // The login button is typically the 2nd button
+      const buttons = document.querySelectorAll('button');
+      if (buttons.length >= 2) {
+        buttons[1].click();
+      }
+    });
     await sleep(2000);
 
-    // Click login button on landing page
-    try {
-      await page.evaluate(() => {
-        const buttons = document.querySelectorAll('button');
-        for (const btn of buttons) {
-          const text = btn.textContent.toLowerCase();
-          if (text.includes('log') || text.includes('sign') || text.includes('play')) {
-            btn.click();
-            return;
-          }
-        }
-      });
-    } catch (e) { /* may already be on login form */ }
-
-    await sleep(1500);
-
-    // Fill credentials
+    // Fill credentials using evaluate (avoids "not clickable" errors)
     log('🔑', 'LOGIN', `Logging in as: ${EMAIL}`);
 
-    try { await page.waitForSelector('#lEmail', { timeout: 10000 }); } catch (e) {}
-
-    const emailField = await page.$('#lEmail');
-    if (emailField) {
-      await emailField.click({ clickCount: 3 });
-      await typeHuman(emailField, EMAIL);
+    // Wait for login form to appear
+    let loginFormFound = false;
+    for (let i = 0; i < 10; i++) {
+      loginFormFound = await page.evaluate(() => !!document.getElementById('lEmail'));
+      if (loginFormFound) break;
+      await sleep(1000);
+      log('🔑', 'LOGIN', `Waiting for login form... (${i + 1}/10)`);
     }
+
+    if (!loginFormFound) {
+      // Log what's on the page for debugging
+      const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || 'empty');
+      log('⚠️', 'LOGIN', `Login form not found. Page content: ${bodyText.substring(0, 200)}`);
+
+      // Try direct URL to login page
+      log('🔑', 'LOGIN', 'Trying direct navigation to login...');
+      await page.goto('https://www.airlinemanager.com/login.php', {
+        waitUntil: 'networkidle2',
+        timeout: 15000,
+      });
+      await sleep(2000);
+
+      loginFormFound = await page.evaluate(() => !!document.getElementById('lEmail'));
+    }
+
+    // Use page.evaluate to fill in the form (works even if elements are overlaid)
+    await page.evaluate((email, password) => {
+      const emailInput = document.getElementById('lEmail');
+      const passInput = document.getElementById('lPass');
+      const rememberBox = document.getElementById('remember');
+
+      if (emailInput) {
+        emailInput.value = email;
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      if (passInput) {
+        passInput.value = password;
+        passInput.dispatchEvent(new Event('input', { bubbles: true }));
+        passInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      if (rememberBox && !rememberBox.checked) {
+        rememberBox.click();
+      }
+    }, EMAIL, PASSWORD);
+
     await sleep(500);
 
-    const passField = await page.$('#lPass');
-    if (passField) {
-      await passField.click({ clickCount: 3 });
-      await typeHuman(passField, PASSWORD);
-    }
-    await sleep(300);
+    // Click login button
+    await page.evaluate(() => {
+      const loginBtn = document.getElementById('btnLogin');
+      if (loginBtn) loginBtn.click();
+    });
 
-    // Remember me
-    const rememberCb = await page.$('#remember');
-    if (rememberCb) await rememberCb.click();
-    await sleep(400);
-
-    // Submit
-    const authBtn = await page.$('#btnLogin');
-    if (authBtn) await authBtn.click();
-
-    await sleep(5000);
+    log('🔑', 'LOGIN', 'Credentials submitted, waiting for game to load...');
+    await sleep(8000);
 
     // Verify login
     const loggedIn = await page.evaluate(() => {
