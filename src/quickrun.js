@@ -276,42 +276,58 @@ async function main() {
       await sleep(500);
     } catch (e) {}
 
-    const departCount = await page.evaluate(() => {
+    let planesToDepart = await page.evaluate(() => {
       const el = document.getElementById('listDepartAmount');
-      return el ? el.innerText.trim() : '0';
+      return el ? parseInt(el.innerText.trim()) || 0 : 0;
     });
-
-    const planesToDepart = parseInt(departCount) || 0;
 
     if (planesToDepart > 0) {
       log('✈️', 'DEPART', `${planesToDepart} flight(s) ready — departing all!`);
 
-      await page.evaluate(() => {
-        const departBtn = document.querySelector('#listDepartAll button:last-child') ||
-                         document.getElementById('listDepartAmount')?.parentElement;
-        if (departBtn) departBtn.click();
-      });
-
-      await sleep(3000);
-
-      // Check remaining
-      const remaining = await page.evaluate(() => {
-        const el = document.getElementById('listDepartAmount');
-        return el ? el.innerText.trim() : '0';
-      });
-
-      const departed = planesToDepart - (parseInt(remaining) || 0);
-      log('✅', 'DEPART', `Departed ${departed} flight(s)!`);
-
-      // If there are still more, depart again
-      if (parseInt(remaining) > 0) {
-        await sleep(1500);
+      // We loop a few times to make sure everything departs
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const initialCount = planesToDepart;
+        
         await page.evaluate(() => {
-          const departBtn = document.querySelector('#listDepartAll button:last-child') ||
-                           document.getElementById('listDepartAmount')?.parentElement;
-          if (departBtn) departBtn.click();
+          // This is the XPath the python bot uses: //*[@id="listDepartAll"]/div/button[2]
+          // Let's try multiple potential depart buttons
+          const pyDepartBtn = document.querySelector('#listDepartAll > div > button:nth-child(2)');
+          const pyDepart2 = document.querySelector('#listDepartAll button:nth-child(2)');
+          const JSBtn = document.getElementById('listDepartAmount')?.parentElement;
+          const alternateBtn = document.querySelector('[onclick*="departAll"]');
+          
+          if (pyDepartBtn) pyDepartBtn.click();
+          else if (pyDepart2) pyDepart2.click();
+          else if (alternateBtn) alternateBtn.click();
+          else if (JSBtn) JSBtn.click();
         });
-        log('✅', 'DEPART', `Departed remaining ${remaining} flight(s)`);
+
+        await sleep(3500);
+
+        planesToDepart = await page.evaluate(() => {
+          const el = document.getElementById('listDepartAmount');
+          return el && el.innerText.trim() !== '' ? parseInt(el.innerText.trim()) || 0 : 0;
+        });
+
+        const departedThisAttempt = initialCount - planesToDepart;
+        if (departedThisAttempt > 0) {
+           log('✅', 'DEPART', `Attempt ${attempt}: Departed ${departedThisAttempt} flight(s)!`);
+        }
+
+        if (planesToDepart <= 0) break;
+        
+        log('⚠️', 'DEPART', `${planesToDepart} flight(s) still remaining, retrying...`);
+        // Try closing any popup that might have blocking it
+        try {
+          await page.evaluate(() => { if (typeof closePop === 'function') closePop(); });
+        } catch (e) {}
+        await sleep(1500);
+      }
+      
+      if (planesToDepart <= 0 || isNaN(planesToDepart)) {
+        log('✅', 'DEPART', 'All flights departed successfully!');
+      } else {
+        log('❌', 'DEPART', `Failed to depart ${planesToDepart} flight(s). Button might be different.`);
       }
     } else {
       log('ℹ️', 'DEPART', 'No flights to depart');
