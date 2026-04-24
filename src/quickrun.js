@@ -288,21 +288,16 @@ async function main() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const initialCount = planesToDepart;
         
+        // Exact logic from original userscript:
         await page.evaluate(() => {
-          // This is the XPath the python bot uses: //*[@id="listDepartAll"]/div/button[2]
-          // Let's try multiple potential depart buttons
-          const pyDepartBtn = document.querySelector('#listDepartAll > div > button:nth-child(2)');
-          const pyDepart2 = document.querySelector('#listDepartAll button:nth-child(2)');
-          const JSBtn = document.getElementById('listDepartAmount')?.parentElement;
-          const alternateBtn = document.querySelector('[onclick*="departAll"]');
-          
-          if (pyDepartBtn) pyDepartBtn.click();
-          else if (pyDepart2) pyDepart2.click();
-          else if (alternateBtn) alternateBtn.click();
-          else if (JSBtn) JSBtn.click();
+          const numberSpan = document.getElementById("listDepartAmount");
+          if (numberSpan && numberSpan.parentElement) {
+             numberSpan.parentElement.click();
+          }
         });
 
-        await sleep(3500);
+        // Slight delay to allow server to process departure
+        await sleep(4000);
 
         planesToDepart = await page.evaluate(() => {
           const el = document.getElementById('listDepartAmount');
@@ -317,7 +312,7 @@ async function main() {
         if (planesToDepart <= 0) break;
         
         log('⚠️', 'DEPART', `${planesToDepart} flight(s) still remaining, retrying...`);
-        // Try closing any popup that might have blocking it
+        // Try closing any popup that might have opened instead
         try {
           await page.evaluate(() => { if (typeof closePop === 'function') closePop(); });
         } catch (e) {}
@@ -327,7 +322,7 @@ async function main() {
       if (planesToDepart <= 0 || isNaN(planesToDepart)) {
         log('✅', 'DEPART', 'All flights departed successfully!');
       } else {
-        log('❌', 'DEPART', `Failed to depart ${planesToDepart} flight(s). Button might be different.`);
+        log('❌', 'DEPART', `Failed to depart ${planesToDepart} flight(s). Waiting for next cycle.`);
       }
     } else {
       log('ℹ️', 'DEPART', 'No flights to depart');
