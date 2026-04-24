@@ -33,9 +33,9 @@ jobs:
             libdrm2 \
             libxkbcommon0 \
             libgbm1 \
-            libasound2 \
             libatspi2.0-0 \
-            libxshmfence1
+            libxshmfence1 \
+            libasound2t64 || sudo apt-get install -y libasound2
 
       - name: Run AM4 Bot Cycle
         env:
