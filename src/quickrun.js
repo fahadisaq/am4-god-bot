@@ -288,16 +288,34 @@ async function main() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const initialCount = planesToDepart;
         
-        // Exact logic from original userscript:
-        await page.evaluate(() => {
-          const numberSpan = document.getElementById("listDepartAmount");
-          if (numberSpan && numberSpan.parentElement) {
-             numberSpan.parentElement.click();
-          }
-        });
+        // Native Puppeteer click (simulates actual human mouse movement & click)
+        // This solves issues where elements ignore non-human DOM clicks
+        try {
+          // Click on the number directly — the click will bubble up to the button
+          await page.click('#listDepartAmount', { delay: rand(50, 150) });
+          log('✈️', 'DEPART', `Clicked depart button native...`);
+        } catch (e) {
+          log('⚠️', 'DEPART', `Native click failed, trying evaluate click...`);
+          await page.evaluate(() => {
+            const el = document.getElementById("listDepartAmount");
+            if (el) {
+              const btn = el.closest('button') || el.closest('div') || el.parentElement;
+              if (btn) btn.click();
+            } else {
+              // Try clicking anything that looks like the depart button
+              const btns = Array.from(document.querySelectorAll('button, div.text-center, li'));
+              for (const b of btns) {
+                if (b.innerText && b.innerText.toLowerCase().includes('depart ') && !b.innerText.toLowerCase().includes('auto')) {
+                  b.click();
+                  break;
+                }
+              }
+            }
+          });
+        }
 
         // Slight delay to allow server to process departure
-        await sleep(4000);
+        await sleep(5000);
 
         planesToDepart = await page.evaluate(() => {
           const el = document.getElementById('listDepartAmount');
