@@ -288,39 +288,31 @@ async function main() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const initialCount = planesToDepart;
         
-        // To debug this completely, let's dump the HTML structure surrounding the plane count
-        const domDump = await page.evaluate(() => {
-          const amountEl = document.getElementById('listDepartAmount');
-          let html = '\\n--- DOM DUMP ---\\n';
-          if (amountEl) {
-            html += 'listDepartAmount Parent innerHTML:\\n' + (amountEl.parentElement ? amountEl.parentElement.innerHTML : 'no parent') + '\\n';
-            html += '\\nlistDepartAmount Grandparent innerHTML:\\n' + (amountEl.parentElement?.parentElement ? amountEl.parentElement.parentElement.innerHTML : 'no grandparent') + '\\n';
-          }
-          const allEl = document.getElementById('listDepartAll');
-          if (allEl) {
-            html += '\\nlistDepartAll outerHTML:\\n' + allEl.outerHTML + '\\n';
-          }
-          return html + '-----------------\\n';
-        });
-
-        log('🔍', 'DEBUG', domDump);
-
         try {
           await page.evaluate(() => {
-            // Because standard clicking fails, let's trigger the onclick directly if it exists
+            // We have the exact HTML from the game:
+            // <button onclick="depAllAirc = true;Ajax('route_depart.php?mode=all&amp;ids=x','runme',this); ">
+            
             const el = document.getElementById('listDepartAmount');
             if (el && el.parentElement) {
-              const p = el.parentElement;
-              // Some games block 'trusted' clicks in headless mode unless triggered a specific way
-              if (p.hasAttribute('onclick')) {
-                // Execute the string inside onclick instead
-                eval(p.getAttribute('onclick'));
+              const btn = el.parentElement;
+              
+              // Instead of simulating clicks that might get blocked by invisible overlays,
+              // we directly invoke the game's internal functions using the exact parameters 
+              // it normally sends when the button is clicked.
+              if (typeof window.depAllAirc !== 'undefined' || typeof window.depAllAirc === 'undefined') {
+                window.depAllAirc = true;
+              }
+              
+              if (typeof window.Ajax === 'function') {
+                window.Ajax('route_depart.php?mode=all&ids=x', 'runme', btn);
               } else {
-                p.click(); 
+                // Fallback to click if Ajax is somehow renamed
+                btn.click();
               }
             }
           });
-          log('✈️', 'DEPART', `Attempted javascript execution click...`);
+          log('✈️', 'DEPART', `Executed direct game departure function...`);
         } catch (e) {
           log('⚠️', 'DEPART', `Execution failed: ${e.message}`);
         }
