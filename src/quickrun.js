@@ -76,8 +76,8 @@ async function main() {
     log('🎯','BOT','Running startup tasks...');
     await collectBonus(page);
     await sleep(2000);
-    await contributeAlliance(page);
-    await sleep(2000);
+    // await contributeAlliance(page);
+    // await sleep(2000);
     await doMaintenance(page);
     lastExtrasCheck = Date.now();
 
@@ -138,8 +138,8 @@ async function main() {
         try {
           await collectBonus(page);
           await sleep(1000);
-          await contributeAlliance(page);
-          await sleep(1000);
+          // await contributeAlliance(page);
+          // await sleep(1000);
           await doMaintenance(page);
           lastExtrasCheck = Date.now();
         } catch(e) {
