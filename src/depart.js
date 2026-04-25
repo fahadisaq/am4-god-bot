@@ -37,12 +37,11 @@ async function startRepCampaign(page) {
 
 async function departAll(page) {
   log('✈️','DEPART','Checking flights...');
-
-  // Start campaigns first
-  await startEcoCampaign(page);
-  await sleep(rand(800,1500));
-  await startRepCampaign(page);
-  await sleep(rand(1000,2000));
+  // Campaigns are disabled here to avoid losing money every 5 mins
+  // await startEcoCampaign(page);
+  // await sleep(rand(800,1500));
+  // await startRepCampaign(page);
+  // await sleep(rand(1000,2000));
 
   // Close any open popups
   try { await page.evaluate(() => { if (typeof closePop==='function') closePop(); }); await sleep(500); } catch(e) {}
