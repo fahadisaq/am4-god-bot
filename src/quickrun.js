@@ -191,7 +191,7 @@ async function runFuelCO2Cycle(page, bankBalance) {
       log('⛽','FUEL',`Price: $${price} | Cap: ${cap.toLocaleString()}`);
       if (price <= FUEL_THRESHOLD && cap > 0) {
         const toBuy = Math.min(Math.floor(Math.max(0,bankBalance-MIN_BANK_BALANCE)/price*1000), cap);
-        if (toBuy > 100) {
+        if (toBuy > 10) {
           await page.evaluate(a => { const i=document.getElementById('amountInput'); if(i){i.value=a; i.dispatchEvent(new Event('input',{bubbles:true}));} }, toBuy);
           await sleep(500);
           await page.evaluate(() => {
@@ -232,7 +232,7 @@ async function runFuelCO2Cycle(page, bankBalance) {
       log('🌿','CO2',`Price: $${price} | Cap: ${cap.toLocaleString()}`);
       if (price <= CO2_THRESHOLD && cap > 0) {
         const toBuy = Math.min(Math.floor(Math.max(0,bankBalance-MIN_BANK_BALANCE)/price*1000), cap);
-        if (toBuy > 100) {
+        if (toBuy > 10) {
           await page.evaluate(a => { const i=document.getElementById('amountInput'); if(i){i.value=a; i.dispatchEvent(new Event('input',{bubbles:true}));} }, toBuy);
           await sleep(500);
           await page.evaluate(() => {
