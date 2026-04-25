@@ -1,49 +1,48 @@
-name: AM4 God Bot - 24/7 Auto Player
+name: AM4 God Bot — 24/7 Auto Player
 
 on:
   schedule:
-      - cron: '0 0,6,12,18 * * *'
-        workflow_dispatch:
+    - cron: '0 0,6,12,18 * * *'
+  workflow_dispatch:
 
-        jobs:
-          play:
-              runs-on: ubuntu-latest
-                  timeout-minutes: 360
+jobs:
+  play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
 
-                      steps:
-                            - name: Checkout code
-                                    uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-                                          - name: Setup Node.js
-                                                  uses: actions/setup-node@v4
-                                                          with:
-                                                                    node-version: '20'
-                                                                              cache: 'npm'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
 
-                                                                                    - name: Install dependencies
-                                                                                            run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-                                                                                                  - name: Install Chrome dependencies
-                                                                                                          run: |
-                                                                                                                    sudo apt-get update
-                                                                                                                              sudo apt-get install -y \
-                                                                                                                                          libnss3 \
-                                                                                                                                                      libatk-bridge2.0-0 \
-                                                                                                                                                                  libdrm2 \
-                                                                                                                                                                              libxkbcommon0 \
-                                                                                                                                                                                          libgbm1 \
-                                                                                                                                                                                                      libatspi2.0-0 \
-                                                                                                                                                                                                                  libxshmfence1 \
-                                                                                                                                                                                                                              libasound2t64 || sudo apt-get install -y libasound2
-                                                                                                                                                                                                                              
-                                                                                                                                                                                                                                    - name: Run AM4 Bot Cycle
-                                                                                                                                                                                                                                            env:
-                                                                                                                                                                                                                                                      AM4_EMAIL: ${{ secrets.AM4_EMAIL }}
-                                                                                                                                                                                                                                                                AM4_PASSWORD: ${{ secrets.AM4_PASSWORD }}
-                                                                                                                                                                                                                                                                          FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '500' }}
-                                                                                                                                                                                                                                                                                    CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '120' }}
-                                                                                                                                                                                                                                                                                              MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
-                                                                                                                                                                                                                                                                                                        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-                                                                                                                                                                                                                                                                                                                  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-                                                                                                                                                                                                                                                                                                                          run: node src/quickrun.js
-                                                                                                                                                                                                                                                                                                                          
+      - name: Install Chrome dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libdrm2 \
+            libxkbcommon0 \
+            libgbm1 \
+            libatspi2.0-0 \
+            libxshmfence1 \
+            libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Run AM4 Bot Cycle
+        env:
+          AM4_EMAIL: ${{ secrets.AM4_EMAIL }}
+          AM4_PASSWORD: ${{ secrets.AM4_PASSWORD }}
+          FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '500' }}
+          CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '120' }}
+          MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node src/quickrun.js
