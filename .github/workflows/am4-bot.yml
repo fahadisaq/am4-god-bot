@@ -43,4 +43,6 @@ jobs:
           FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '500' }}
           CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '120' }}
           MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
+                    TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+                              TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node src/quickrun.js
