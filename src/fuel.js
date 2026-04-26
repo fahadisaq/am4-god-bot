@@ -5,8 +5,8 @@
 const tg = require('./telegram');
 const priceMemory = require('./priceMemory');
 
-const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 700;
-const CO2_THRESHOLD = parseInt(process.env.CO2_THRESHOLD) || 140;
+const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 800;
+const CO2_THRESHOLD = parseInt(process.env.CO2_THRESHOLD) || 150;
 const MIN_BANK_BALANCE = parseInt(process.env.MIN_BANK_BALANCE) || 500000;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
