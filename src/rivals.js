@@ -21,7 +21,14 @@ async function checkRanking(page) {
     await new Promise(r => setTimeout(r, 3000));
 
     const data = await page.evaluate(() => {
-      const rows = document.querySelectorAll('#allianceScore tr, .score-row, [class*="ranking"] tr');
+      // Only look inside the popup container
+      const popup = document.getElementById('popMain') 
+        || document.querySelector('.popup-content')
+        || document.getElementById('popContent');
+      
+      if (!popup) return { players: [], myName: '' };
+      
+      const rows = popup.querySelectorAll('tr, .score-row');
       const players = [];
       rows.forEach((row, idx) => {
         const cols = row.querySelectorAll('td');

@@ -27,7 +27,16 @@ async function getRouteStats(page) {
 
     const routes = await page.evaluate(() => {
       const results = [];
-      const rows = document.querySelectorAll('#routeList tr, [class*="route"], .route-row, table tr');
+      
+      // IMPORTANT: Only look inside the popup, not the whole page!
+      const popup = document.getElementById('popMain') 
+        || document.querySelector('.popup-content')
+        || document.querySelector('.modal-body')
+        || document.getElementById('popContent');
+      
+      if (!popup) return [];
+      
+      const rows = popup.querySelectorAll('tr, [class*="route"], .route-row');
       
       rows.forEach((row, idx) => {
         try {

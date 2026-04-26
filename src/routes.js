@@ -22,7 +22,14 @@ async function scrapeRoutes(page) {
     await new Promise(r => setTimeout(r, 3000));
 
     const routes = await page.evaluate(() => {
-      const rows = document.querySelectorAll('#routeList tr, .route-row, [class*="route"]');
+      // Only look inside the popup container
+      const popup = document.getElementById('popMain') 
+        || document.querySelector('.popup-content')
+        || document.getElementById('popContent');
+      
+      if (!popup) return [];
+      
+      const rows = popup.querySelectorAll('tr, .route-row');
       const results = [];
 
       rows.forEach(row => {

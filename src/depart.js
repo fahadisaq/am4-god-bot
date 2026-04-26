@@ -12,6 +12,7 @@ function log(icon, module, msg) {
 
 // Campaign throttle — run at most once per hour (not every 5-min cycle)
 let lastCampaignRun = 0;
+let consecutiveFailCycles = 0; // Track departure failures to detect stuck page
 const CAMPAIGN_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const REP_THRESHOLD = 85;  // Only run if rep below this %
 const ECO_THRESHOLD = 85;  // Only run if eco below this %
@@ -106,6 +107,7 @@ async function departAll(page) {
 
   if (toDepart === 0) {
     log('ℹ️','DEPART','No flights to depart');
+    consecutiveFailCycles = 0;
     return 0;
   }
 
@@ -142,8 +144,34 @@ async function departAll(page) {
   if (departed > 0) {
     log('✅','DEPART',`Total departed: ${departed}`);
     await tg.departed(departed);
+    consecutiveFailCycles = 0;
   }
-  if (toDepart > 0) log('❌','DEPART',`${toDepart} failed to depart`);
+  
+  if (toDepart > 0) {
+    log('❌','DEPART',`${toDepart} failed to depart`);
+    
+    // Track consecutive failures — if most flights fail, page may be stuck
+    const failRate = toDepart / originalCount;
+    if (failRate >= 0.8) {
+      consecutiveFailCycles++;
+      log('⚠️','DEPART',`High fail rate (${Math.round(failRate*100)}%) — streak: ${consecutiveFailCycles}/3`);
+      
+      // After 3 consecutive high-fail cycles, reload the page
+      if (consecutiveFailCycles >= 3) {
+        log('🔄','DEPART','Page stuck! Reloading to fix...');
+        try {
+          await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+          await sleep(5000);
+          consecutiveFailCycles = 0;
+          log('✅','DEPART','Page reloaded — should fix departures next cycle');
+        } catch(e) {
+          log('❌','DEPART',`Reload failed: ${e.message}`);
+        }
+      }
+    } else {
+      consecutiveFailCycles = 0;
+    }
+  }
 
   return departed;
 }

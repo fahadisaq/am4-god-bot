@@ -30,7 +30,15 @@ async function getTopAirlines(page) {
 
     const airlines = await page.evaluate(() => {
       const results = [];
-      const rows = document.querySelectorAll('table tr, [class*="rank"] tr, #rankingList tr');
+      
+      // Only look inside the popup container
+      const popup = document.getElementById('popMain') 
+        || document.querySelector('.popup-content')
+        || document.getElementById('popContent');
+      
+      if (!popup) return [];
+      
+      const rows = popup.querySelectorAll('tr, [class*="rank"]');
       
       rows.forEach((row, idx) => {
         try {
