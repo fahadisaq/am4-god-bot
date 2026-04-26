@@ -26,6 +26,7 @@ const { checkRanking } = require('./rivals');
 const { checkScreenshotDashboard } = require('./screenshotDash');
 const { checkAndFixRoutes, repairAllAircraft } = require('./routeManager');
 const { optimizeAllRoutes } = require('./ticketOptimizer');
+const { spyOnTopAirlines } = require('./topAirlineSpy');
 const priceMemory = require('./priceMemory');
 const reporter = require('./reporter');
 const commander = require('./commander');
@@ -246,6 +247,13 @@ async function main() {
         } catch(e) {
           log('⚠️','RIVALS',e.message);
         }
+      }
+
+      // ── Spy on top airlines (every 6 hours) ──
+      try {
+        await spyOnTopAirlines(page);
+      } catch(e) {
+        log('⚠️','SPY',e.message);
       }
 
       // ── Auto fleet expansion (every hour) ──
