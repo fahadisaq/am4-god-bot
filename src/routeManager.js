@@ -27,7 +27,6 @@ async function getRouteStats(page) {
 
     const routes = await page.evaluate(() => {
       const results = [];
-      // AM4 route list: look for route rows
       const rows = document.querySelectorAll('#routeList tr, [class*="route"], .route-row, table tr');
       
       rows.forEach((row, idx) => {
@@ -36,34 +35,76 @@ async function getRouteStats(page) {
           if (cells.length < 2) return;
           
           const text = row.innerText || '';
-          
-          // Extract route name/destination
           const name = cells[0]?.innerText?.trim() || `Route ${idx}`;
           
-          // Look for load percentage (like "85%" or "0%")
+          // Load percentage
           const loadMatch = text.match(/(\d+)\s*%/);
           const load = loadMatch ? parseInt(loadMatch[1]) : -1;
           
-          // Look for pax count
+          // Pax count
           const paxMatch = text.match(/(\d[\d,]*)\s*(?:pax|passengers)/i);
           const pax = paxMatch ? parseInt(paxMatch[1].replace(/,/g, '')) : -1;
           
-          // Look for revenue
+          // Revenue
           const revMatch = text.match(/\$\s*([\d,]+)/);
           const revenue = revMatch ? parseInt(revMatch[1].replace(/,/g, '')) : 0;
           
-          // Look for route ID in links or data attributes
+          // === AGGRESSIVE Route ID extraction ===
           let routeId = '';
-          const links = row.querySelectorAll('a[href], [onclick]');
-          for (const link of links) {
-            const href = link.getAttribute('href') || link.getAttribute('onclick') || '';
-            const idMatch = href.match(/route[_\-]?(?:detail|config|edit)?\.php\?.*?id=(\d+)/i);
-            if (idMatch) { routeId = idMatch[1]; break; }
-            const idMatch2 = href.match(/(\d{4,})/);
-            if (idMatch2) { routeId = idMatch2[1]; break; }
+          
+          // Strategy 1: Check row's own onclick
+          const rowOnclick = row.getAttribute('onclick') || '';
+          
+          // Strategy 2: Check all child elements with onclick or href
+          const clickables = row.querySelectorAll('a[href], [onclick], button, [data-id], [data-route]');
+          
+          // Strategy 3: Check data attributes on the row itself
+          const rowDataId = row.getAttribute('data-id') || row.getAttribute('data-route') || '';
+          
+          // Collect all attribute strings to search
+          const attrStrings = [rowOnclick, rowDataId];
+          
+          clickables.forEach(el => {
+            attrStrings.push(el.getAttribute('onclick') || '');
+            attrStrings.push(el.getAttribute('href') || '');
+            attrStrings.push(el.getAttribute('data-id') || '');
+            attrStrings.push(el.getAttribute('data-route') || '');
+          });
+          
+          // Strategy 4: Check the innerHTML for popup() calls
+          const rowHtml = row.innerHTML || '';
+          const popupMatch = rowHtml.match(/popup\s*\(\s*['"]([^'"]*id=(\d+)[^'"]*)['"]/i);
+          if (popupMatch) attrStrings.push(popupMatch[1]);
+          
+          // Now search all collected strings for an ID
+          for (const str of attrStrings) {
+            if (!str) continue;
+            // Pattern 1: id=NNN
+            const m1 = str.match(/id[=:](\d+)/i);
+            if (m1) { routeId = m1[1]; break; }
+            // Pattern 2: route_detail.php or similar with number
+            const m2 = str.match(/route[^'"]*?(\d+)/i);
+            if (m2) { routeId = m2[1]; break; }
+            // Pattern 3: popup('something', ..., NNN) 
+            const m3 = str.match(/popup\([^)]*?(\d{2,})/i);
+            if (m3) { routeId = m3[1]; break; }
+            // Pattern 4: any standalone number 2+ digits
+            const m4 = str.match(/\b(\d{2,})\b/);
+            if (m4) { routeId = m4[1]; break; }
           }
           
-          results.push({ name, load, pax, revenue, routeId, index: idx });
+          // Debug: for first route, dump what we see
+          const debug = idx < 2 ? {
+            rowOnclick: rowOnclick.slice(0, 100),
+            firstChildOnclick: (clickables[0]?.getAttribute('onclick') || '').slice(0, 100),
+            firstChildHref: (clickables[0]?.getAttribute('href') || '').slice(0, 100),
+            rowDataId,
+            popupMatch: popupMatch ? popupMatch[0].slice(0, 100) : '',
+            htmlSnippet: rowHtml.slice(0, 200),
+            clickableCount: clickables.length,
+          } : null;
+          
+          results.push({ name, load, pax, revenue, routeId, index: idx, debug });
         } catch(e) {}
       });
       
@@ -71,6 +112,19 @@ async function getRouteStats(page) {
     });
 
     try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch(e) {}
+    
+    // Debug: log what we found for the first route
+    if (routes.length > 0 && routes[0].debug) {
+      log('🔍', `DEBUG Route[0] "${routes[0].name}":`);
+      log('🔍', `  onclick: ${routes[0].debug.rowOnclick || '(none)'}`);
+      log('🔍', `  child onclick: ${routes[0].debug.firstChildOnclick || '(none)'}`);
+      log('🔍', `  child href: ${routes[0].debug.firstChildHref || '(none)'}`);
+      log('🔍', `  data-id: ${routes[0].debug.rowDataId || '(none)'}`);
+      log('🔍', `  popup: ${routes[0].debug.popupMatch || '(none)'}`);
+      log('🔍', `  clickables: ${routes[0].debug.clickableCount}`);
+      log('🔍', `  HTML: ${routes[0].debug.htmlSnippet}`);
+      log('🔍', `  routeId: ${routes[0].routeId || '(none found)'}`);
+    }
     
     return routes;
   } catch(e) {
