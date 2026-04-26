@@ -1,5 +1,5 @@
 // ============================================================
-//  DEPART MODULE
+//  DEPART MODULE — with Smart Campaign Timing
 // ============================================================
 
 const tg = require('./telegram');
@@ -8,6 +8,36 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function log(icon, module, msg) {
   console.log(`${icon} [${new Date().toISOString().slice(11,19)}] [${module}] ${msg}`);
+}
+
+// Campaign throttle — run at most once per hour (not every 5-min cycle)
+let lastCampaignRun = 0;
+const CAMPAIGN_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REP_THRESHOLD = 85;  // Only run if rep below this %
+const ECO_THRESHOLD = 85;  // Only run if eco below this %
+
+// Check actual rep and eco scores from the game UI
+async function checkScores(page) {
+  try {
+    const scores = await page.evaluate(() => {
+      // AM4 typically shows rep/eco in header or stats panel
+      let rep = 100, eco = 100;
+      const els = document.querySelectorAll('[id*="rep"], [id*="eco"], [class*="reputation"], [class*="ecology"]');
+      for (const el of els) {
+        const text = el.innerText || '';
+        const match = text.match(/(\d+)%?/);
+        if (match) {
+          const val = parseInt(match[1]);
+          if (el.id?.includes('rep') || el.className?.includes('rep')) rep = val;
+          if (el.id?.includes('eco') || el.className?.includes('eco')) eco = val;
+        }
+      }
+      return { rep, eco };
+    });
+    return scores;
+  } catch(e) {
+    return { rep: 100, eco: 100 }; // assume full — don't waste money
+  }
 }
 
 async function startEcoCampaign(page) {
@@ -37,11 +67,34 @@ async function startRepCampaign(page) {
 
 async function departAll(page) {
   log('✈️','DEPART','Checking flights...');
-  // Campaigns are disabled here to avoid losing money every 5 mins
-  // await startEcoCampaign(page);
-  // await sleep(rand(800,1500));
-  // await startRepCampaign(page);
-  // await sleep(rand(1000,2000));
+
+  // ── Smart Campaign Timing (max once per hour, only if needed) ──
+  const timeSinceLastCampaign = Date.now() - lastCampaignRun;
+  if (timeSinceLastCampaign >= CAMPAIGN_INTERVAL_MS) {
+    const scores = await checkScores(page);
+    log('📊','CAMPAIGN',`Rep: ${scores.rep}% | Eco: ${scores.eco}%`);
+
+    if (scores.eco < ECO_THRESHOLD) {
+      log('🌿','CAMPAIGN',`Eco ${scores.eco}% < ${ECO_THRESHOLD}% — starting eco campaign`);
+      await startEcoCampaign(page);
+      await sleep(rand(800,1500));
+    } else {
+      log('ℹ️','CAMPAIGN',`Eco ${scores.eco}% is healthy — skipping eco campaign 💰`);
+    }
+
+    if (scores.rep < REP_THRESHOLD) {
+      log('⭐','CAMPAIGN',`Rep ${scores.rep}% < ${REP_THRESHOLD}% — starting rep campaign`);
+      await startRepCampaign(page);
+      await sleep(rand(800,1500));
+    } else {
+      log('ℹ️','CAMPAIGN',`Rep ${scores.rep}% is healthy — skipping rep campaign 💰`);
+    }
+
+    lastCampaignRun = Date.now();
+  } else {
+    const nextCampaign = Math.ceil((CAMPAIGN_INTERVAL_MS - timeSinceLastCampaign) / 60000);
+    log('ℹ️','CAMPAIGN',`Next check in ~${nextCampaign}m`);
+  }
 
   // Close any open popups
   try { await page.evaluate(() => { if (typeof closePop==='function') closePop(); }); await sleep(500); } catch(e) {}

@@ -39,6 +39,8 @@ function sendMessage(text) {
 }
 
 module.exports = {
+  // Raw send (used by reporter, commander, fleet)
+  send: sendMessage,
   // Bot started
   started: (cycle) => sendMessage(
     `🚀 <b>AM4 God Bot Started</b>\n` +

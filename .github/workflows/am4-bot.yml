@@ -13,6 +13,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -36,6 +39,12 @@ jobs:
             libxshmfence1 \
             libasound2t64 || sudo apt-get install -y libasound2
 
+      - name: Pull latest data (price history + stats)
+        run: |
+          git config user.name "AM4 God Bot"
+          git config user.email "bot@am4-god-bot.github"
+          git pull --rebase origin main || echo "Nothing to pull"
+
       - name: Run AM4 Bot Cycle
         env:
           AM4_EMAIL: ${{ secrets.AM4_EMAIL }}
@@ -43,6 +52,16 @@ jobs:
           FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '500' }}
           CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '120' }}
           MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
+          AUTO_BUY_THRESHOLD: ${{ secrets.AUTO_BUY_THRESHOLD || '0' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node src/quickrun.js
+
+      - name: Save price history + stats back to repo
+        if: always()
+        run: |
+          git config user.name "AM4 God Bot"
+          git config user.email "bot@am4-god-bot.github"
+          git add data/ || true
+          git diff --staged --quiet || git commit -m "📊 Auto-save price history + stats [skip ci]"
+          git push origin main || echo "Nothing to push"

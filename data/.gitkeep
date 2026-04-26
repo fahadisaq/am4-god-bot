@@ -1,0 +1,3 @@
+# This file ensures the data/ directory is tracked by git.
+# price-history.json and daily-stats.json will be stored here
+# and committed back to the repo after each bot session.
