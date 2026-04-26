@@ -22,8 +22,9 @@ const { collectBonus, doMaintenance } = require('./extras');
 const { checkFleetExpansion } = require('./fleet');
 const { scrapeRoutes, getRouteReport } = require('./routes');
 const { checkRanking } = require('./rivals');
-const { checkSmartLoan, checkAndRepayLoan } = require('./loans');
+// const { checkSmartLoan, checkAndRepayLoan } = require('./loans'); // DISABLED — user has no loan
 const { checkScreenshotDashboard } = require('./screenshotDash');
+const { checkAndFixRoutes, repairAllAircraft } = require('./routeManager');
 const priceMemory = require('./priceMemory');
 const reporter = require('./reporter');
 const commander = require('./commander');
@@ -36,6 +37,7 @@ const FUEL_CHECK_INTERVAL_MS = 30 * 60 * 1000;  // 30 min
 const EXTRAS_INTERVAL_MS     = 60 * 60 * 1000;  // 60 min
 const SUMMARY_INTERVAL_MS    = 30 * 60 * 1000;  // 30 min
 const ROUTE_SCRAPE_INTERVAL  = 2  * 60 * 60 * 1000; // 2 hours
+const ROUTE_FIX_INTERVAL     = 2  * 60 * 60 * 1000; // 2 hours
 const FLEET_CHECK_INTERVAL   = 60 * 60 * 1000;  // 1 hour
 const RIVALS_CHECK_INTERVAL  = 2  * 60 * 60 * 1000; // 2 hours
 const TOTAL_RUNTIME_MS       = (5 * 60 + 50) * 60 * 1000; // 5h50m
@@ -95,6 +97,7 @@ async function main() {
     let lastSummary = 0;
     let lastRouteScrape = 0;
     let lastRivalsCheck = 0;
+    let lastRouteFix = 0;
     let lastFuelPrice = 0;
     let lastCO2Price = 0;
 
@@ -113,6 +116,12 @@ async function main() {
     await collectBonus(page);
     await sleep(2000);
     await doMaintenance(page);
+    await sleep(1000);
+    await repairAllAircraft(page);
+    await sleep(1000);
+    // Fix empty planes on startup
+    await checkAndFixRoutes(page);
+    lastRouteFix = Date.now();
     lastExtrasCheck = Date.now();
 
     // Initial balance read for reporter
@@ -240,11 +249,16 @@ async function main() {
         log('⚠️','FLEET',e.message);
       }
 
-      // ── Smart loan manager (every 30 min, only on extreme fuel dips) ──
-      try {
-        await checkSmartLoan(page, bankBalance, lastFuelPrice);
-      } catch(e) {
-        log('⚠️','LOANS',e.message);
+      // ── Route health check & seat config fix (every 2 hours) ──
+      if (Date.now() - lastRouteFix >= ROUTE_FIX_INTERVAL) {
+        try {
+          await checkAndFixRoutes(page);
+          await sleep(1000);
+          await repairAllAircraft(page);
+          lastRouteFix = Date.now();
+        } catch(e) {
+          log('⚠️','ROUTES',e.message);
+        }
       }
 
       // ── Screenshot dashboard (every 30 min) ──

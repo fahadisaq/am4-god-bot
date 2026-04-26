@@ -1,6 +1,5 @@
 // ============================================================
-//  SCREENSHOT DASHBOARD — Visual Telegram Updates
-//  Takes a screenshot every 30 min and sends to Telegram
+//  SCREENSHOT DASHBOARD — with proper Telegram error logging
 // ============================================================
 
 const https = require('https');
@@ -19,24 +18,37 @@ function log(icon, msg) {
 
 function sendPhotoToTelegram(filePath, caption) {
   return new Promise((resolve) => {
-    if (!TOKEN || !CHAT_ID) { resolve(); return; }
-    if (!fs.existsSync(filePath)) { resolve(); return; }
+    if (!TOKEN || !CHAT_ID) { log('⚠️', 'No Telegram token/chat ID'); resolve(); return; }
+    if (!fs.existsSync(filePath)) { log('⚠️', `File not found: ${filePath}`); resolve(); return; }
 
     const fileData = fs.readFileSync(filePath);
-    const boundary = '----AM4BotBoundary' + Date.now();
-    const captionEncoded = (caption || '').slice(0, 1024);
+    const fileSize = fileData.length;
+    log('📤', `Uploading screenshot (${Math.round(fileSize/1024)}KB)...`);
 
-    // Build multipart/form-data body
-    const parts = [
-      `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${CHAT_ID}`,
-      `--${boundary}\r\nContent-Disposition: form-data; name="parse_mode"\r\n\r\nHTML`,
-      `--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${captionEncoded}`,
-      `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="dashboard.png"\r\nContent-Type: image/png\r\n\r\n`,
-    ];
+    const boundary = '----AM4Bot' + Date.now();
+    const captionText = (caption || '').slice(0, 1024);
 
-    const textPart = Buffer.from(parts.join('\r\n') + '\r\n', 'utf8');
-    const closingPart = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-    const body = Buffer.concat([textPart, fileData, closingPart]);
+    // Build multipart body properly
+    const header = [
+      `--${boundary}\r\n`,
+      `Content-Disposition: form-data; name="chat_id"\r\n\r\n`,
+      `${CHAT_ID}\r\n`,
+      `--${boundary}\r\n`,
+      `Content-Disposition: form-data; name="parse_mode"\r\n\r\n`,
+      `HTML\r\n`,
+      `--${boundary}\r\n`,
+      `Content-Disposition: form-data; name="caption"\r\n\r\n`,
+      `${captionText}\r\n`,
+      `--${boundary}\r\n`,
+      `Content-Disposition: form-data; name="photo"; filename="dashboard.png"\r\n`,
+      `Content-Type: image/png\r\n\r\n`,
+    ].join('');
+
+    const footer = `\r\n--${boundary}--\r\n`;
+
+    const headerBuf = Buffer.from(header, 'utf8');
+    const footerBuf = Buffer.from(footer, 'utf8');
+    const body = Buffer.concat([headerBuf, fileData, footerBuf]);
 
     const options = {
       hostname: 'api.telegram.org',
@@ -49,10 +61,21 @@ function sendPhotoToTelegram(filePath, caption) {
     };
 
     const req = https.request(options, (res) => {
-      res.on('data', () => {});
-      res.on('end', () => resolve());
+      let responseData = '';
+      res.on('data', (chunk) => { responseData += chunk; });
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          log('✅', 'Screenshot sent to Telegram!');
+        } else {
+          log('❌', `Telegram API error ${res.statusCode}: ${responseData.slice(0, 200)}`);
+        }
+        resolve();
+      });
     });
-    req.on('error', () => resolve());
+    req.on('error', (e) => {
+      log('❌', `Upload error: ${e.message}`);
+      resolve();
+    });
     req.write(body);
     req.end();
   });
@@ -61,9 +84,9 @@ function sendPhotoToTelegram(filePath, caption) {
 async function sendScreenshot(page, caption) {
   try {
     await page.screenshot({ path: SCREENSHOT_PATH, fullPage: false });
-    log('📸', 'Screenshot taken — sending to Telegram...');
+    const stats = fs.statSync(SCREENSHOT_PATH);
+    log('📸', `Screenshot taken (${Math.round(stats.size/1024)}KB)`);
     await sendPhotoToTelegram(SCREENSHOT_PATH, caption);
-    log('✅', 'Screenshot sent to Telegram!');
   } catch(e) {
     log('⚠️', `Screenshot failed: ${e.message}`);
   }

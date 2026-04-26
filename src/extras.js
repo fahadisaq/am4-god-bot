@@ -49,37 +49,58 @@ async function doMaintenance(page) {
     await page.evaluate(() => {
       if (typeof popup === 'function') popup('maintenance.php', 'Maintenance', false, false, true);
     });
-    await sleep(2000);
+    await sleep(3000);
 
-    // Count aircraft needing maintenance
+    // Check maintenance status and click repair
     const result = await page.evaluate(() => {
-      const mainEl = document.getElementById('maintMain') || document.getElementById('popMain');
-      if (!mainEl) return { count: 0 };
+      // Try multiple containers
+      const containers = [
+        document.getElementById('maintMain'),
+        document.getElementById('popMain'),
+        document.querySelector('.popup-content'),
+        document.querySelector('.modal-body'),
+      ].filter(Boolean);
 
-      // Find all aircraft with maintenance needed (red/warning indicators)
-      const needsMaint = mainEl.querySelectorAll('.maint-needed, .text-danger, [data-maint="needed"]');
-      return { count: needsMaint.length };
+      if (containers.length === 0) return { count: 0, error: 'No container found' };
+
+      const container = containers[0];
+      const text = container.innerText || '';
+
+      // Count aircraft needing maintenance
+      const needsMaint = container.querySelectorAll(
+        '.maint-needed, .text-danger, [data-maint="needed"], .warning, .text-warning, tr.danger'
+      );
+      
+      // Also check text for percentage indicators < 100%
+      const percentMatches = text.match(/\d+%/g) || [];
+      const lowPercent = percentMatches.filter(p => parseInt(p) < 80).length;
+
+      const count = Math.max(needsMaint.length, lowPercent);
+
+      // Try to find and click maintain-all button
+      let clicked = false;
+      const allBtns = container.querySelectorAll('button, a.btn, [onclick]');
+      for (const b of allBtns) {
+        const btnText = (b.textContent || '').toLowerCase();
+        if (btnText.includes('maintain all') || btnText.includes('fix all') ||
+            btnText.includes('repair all') || btnText.includes('check all') ||
+            (btnText.includes('all') && btnText.includes('maint'))) {
+          b.click();
+          clicked = true;
+          break;
+        }
+      }
+
+      return { count, clicked, debug: text.slice(0, 200) };
     });
 
     if (result.count > 0) {
-      log('🔧','MAINT',`${result.count} aircraft need maintenance`);
-
-      // Click maintain all button
-      await page.evaluate(() => {
-        const mainEl = document.getElementById('maintMain') || document.getElementById('popMain');
-        if (!mainEl) return;
-        const btns = mainEl.querySelectorAll('button');
-        for (const b of btns) {
-          if (b.textContent.toLowerCase().includes('maintain all') ||
-              b.textContent.toLowerCase().includes('fix all') ||
-              b.textContent.toLowerCase().includes('all')) {
-            b.click(); return;
-          }
-        }
-      });
-      await sleep(2000);
-      log('✅','MAINT','Maintenance done!');
-      await tg.maintenanceDone(result.count);
+      log('🔧','MAINT',`${result.count} aircraft need maintenance (clicked: ${result.clicked})`);
+      if (result.clicked) {
+        await sleep(2000);
+        log('✅','MAINT','Maintenance done!');
+        await tg.maintenanceDone(result.count);
+      }
     } else {
       log('ℹ️','MAINT','All aircraft in good condition');
     }

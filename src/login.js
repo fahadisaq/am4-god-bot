@@ -17,7 +17,8 @@ async function setupPage(browser) {
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36');
   await page.setRequestInterception(true);
   page.on('request', req => {
-    ['image','stylesheet','font','media'].includes(req.resourceType()) ? req.abort() : req.continue();
+    // Only block fonts/media — keep images+CSS so screenshots look correct
+    ['font','media'].includes(req.resourceType()) ? req.abort() : req.continue();
   });
   return page;
 }
