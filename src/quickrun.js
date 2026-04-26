@@ -71,7 +71,7 @@ async function main() {
   priceMemory.loadHistory();
   reporter.loadStats();
 
-  const totalCycles = Math.floor(TOTAL_RUNTIME_MS / CYCLE_INTERVAL_MS);
+  const totalCycles = Math.floor(TOTAL_RUNTIME_MS / ((MIN_CYCLE_MS + MAX_CYCLE_MS) / 2));
 
   let browser;
   try {
@@ -151,7 +151,7 @@ async function main() {
       // ── Skip departures if paused ──
       if (commander.isPaused()) {
         log('⏸','LOOP','Bot is paused — skipping departures this cycle');
-        await sleep(CYCLE_INTERVAL_MS);
+        await sleep(60000); // wait 1 min before retrying
         continue;
       }
 
