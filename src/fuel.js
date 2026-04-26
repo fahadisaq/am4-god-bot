@@ -56,7 +56,15 @@ async function checkFuel(page, bankBalance) {
     recordPrice('fuel', price);
 
     if (price <= FUEL_THRESHOLD && cap > 0) {
-      const affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+      let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+      
+      // EMERGENCY DEADLOCK FIX: If bank is below MIN_BANK_BALANCE but we need fuel to fly,
+      // allow spending up to half of whatever cash is left to get planes into the air!
+      if (affordReserve === 0 && bankBalance > 10000) {
+        affordReserve = Math.floor(bankBalance / 2);
+        log('🚨','FUEL','Emergency unlock: Using half of remaining cash to buy fuel!');
+      }
+
       const canAfford = Math.floor(affordReserve / price * 1000);
       const toBuy = Math.min(canAfford, cap);
 
@@ -121,7 +129,15 @@ async function checkCO2(page, bankBalance) {
     recordPrice('co2', price);
 
     if (price <= CO2_THRESHOLD && cap > 0) {
-      const affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+      let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+      
+      // EMERGENCY DEADLOCK FIX: If bank is below MIN_BANK_BALANCE but CO2 price is good,
+      // allow spending up to a quarter of remaining cash to avoid CO2 penalties!
+      if (affordReserve === 0 && bankBalance > 10000) {
+        affordReserve = Math.floor(bankBalance / 4);
+        log('🚨','CO2','Emergency unlock: Using quarter of remaining cash for CO2!');
+      }
+
       const canAfford = Math.floor(affordReserve / price * 1000);
       const toBuy = Math.min(canAfford, cap);
 
