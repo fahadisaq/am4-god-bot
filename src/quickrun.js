@@ -18,7 +18,7 @@ const puppeteer = require('puppeteer');
 const { login, ensureLoggedIn } = require('./login');
 const { departAll } = require('./depart');
 const { checkFuel, checkCO2 } = require('./fuel');
-const { collectBonus, doMaintenance } = require('./extras');
+const { collectBonus, doMaintenance, contributeAlliance } = require('./extras');
 const { checkFleetExpansion } = require('./fleet');
 const { scrapeRoutes, getRouteReport } = require('./routes');
 const { checkRanking } = require('./rivals');
@@ -220,6 +220,8 @@ async function main() {
           await collectBonus(page);
           await sleep(1000);
           await doMaintenance(page);
+          await sleep(1000);
+          await contributeAlliance(page);
           lastExtrasCheck = Date.now();
         } catch(e) {
           log('⚠️','EXTRAS',e.message);
