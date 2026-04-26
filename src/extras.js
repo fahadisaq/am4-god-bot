@@ -51,58 +51,106 @@ async function doMaintenance(page) {
     });
     await sleep(3000);
 
-    // Check maintenance status and click repair
-    const result = await page.evaluate(() => {
-      // Try multiple containers
-      const containers = [
-        document.getElementById('maintMain'),
-        document.getElementById('popMain'),
-        document.querySelector('.popup-content'),
-        document.querySelector('.modal-body'),
-      ].filter(Boolean);
-
-      if (containers.length === 0) return { count: 0, error: 'No container found' };
-
-      const container = containers[0];
-      const text = container.innerText || '';
-
-      // Count aircraft needing maintenance
-      const needsMaint = container.querySelectorAll(
-        '.maint-needed, .text-danger, [data-maint="needed"], .warning, .text-warning, tr.danger'
-      );
+    // Step 1: Read the maintenance summary from the popup
+    const stats = await page.evaluate(() => {
+      const popup = document.getElementById('popMain') 
+        || document.querySelector('.popup-content')
+        || document.getElementById('popContent');
       
-      // Also check text for percentage indicators < 100%
-      const percentMatches = text.match(/\d+%/g) || [];
-      const lowPercent = percentMatches.filter(p => parseInt(p) < 80).length;
-
-      const count = Math.max(needsMaint.length, lowPercent);
-
-      // Try to find and click maintain-all button
-      let clicked = false;
-      const allBtns = container.querySelectorAll('button, a.btn, [onclick]');
-      for (const b of allBtns) {
-        const btnText = (b.textContent || '').toLowerCase();
-        if (btnText.includes('maintain all') || btnText.includes('fix all') ||
-            btnText.includes('repair all') || btnText.includes('check all') ||
-            (btnText.includes('all') && btnText.includes('maint'))) {
-          b.click();
-          clicked = true;
-          break;
-        }
-      }
-
-      return { count, clicked, debug: text.slice(0, 200) };
+      if (!popup) return { error: 'No popup found' };
+      
+      const text = popup.innerText || '';
+      
+      // Parse the stats: "Fleet size 97  At hub 11  Worn A/C 18  A check due 3"
+      const wornMatch = text.match(/worn\s*a\/?c\s*(\d+)/i);
+      const acheckMatch = text.match(/a\s*check\s*due\s*(\d+)/i);
+      const fleetMatch = text.match(/fleet\s*size\s*(\d+)/i);
+      
+      return {
+        worn: wornMatch ? parseInt(wornMatch[1]) : 0,
+        acheckDue: acheckMatch ? parseInt(acheckMatch[1]) : 0,
+        fleetSize: fleetMatch ? parseInt(fleetMatch[1]) : 0,
+        hasWarning: text.toLowerCase().includes('poorly maintained') || text.toLowerCase().includes('warning'),
+        textSnippet: text.slice(0, 300),
+      };
     });
 
-    if (result.count > 0) {
-      log('🔧','MAINT',`${result.count} aircraft need maintenance (clicked: ${result.clicked})`);
-      if (result.clicked) {
-        await sleep(2000);
-        log('✅','MAINT','Maintenance done!');
-        await tg.maintenanceDone(result.count);
-      }
+    log('🔧','MAINT',`Fleet: ${stats.fleetSize} | Worn: ${stats.worn} | A-check due: ${stats.acheckDue}`);
+
+    if (stats.acheckDue > 0 || stats.worn > 0) {
+      log('⚠️','MAINT',`${stats.acheckDue} A-checks needed, ${stats.worn} worn aircraft!`);
+      
+      // Step 2: Click "Show details" to expand the list
+      await page.evaluate(() => {
+        const popup = document.getElementById('popMain') || document.querySelector('.popup-content');
+        if (!popup) return;
+        
+        const btns = popup.querySelectorAll('button, a, [onclick], .btn');
+        for (const b of btns) {
+          const t = (b.textContent || '').toLowerCase();
+          if (t.includes('show detail') || t.includes('details')) {
+            b.click();
+            break;
+          }
+        }
+      });
+      await sleep(2000);
+      
+      // Step 3: Click all A-check / repair buttons
+      const repairResult = await page.evaluate(() => {
+        const popup = document.getElementById('popMain') || document.querySelector('.popup-content');
+        if (!popup) return { clicked: 0 };
+        
+        let clicked = 0;
+        const btns = popup.querySelectorAll('button, a.btn, [onclick], .btn');
+        
+        for (const b of btns) {
+          const t = (b.textContent || '').toLowerCase();
+          const onclick = (b.getAttribute('onclick') || '').toLowerCase();
+          
+          // Click any A-check, repair, or maintain button
+          if (t.includes('a-check') || t.includes('a check') || 
+              t.includes('repair') || t.includes('maintain') ||
+              onclick.includes('acheck') || onclick.includes('maintenance') ||
+              onclick.includes('repair')) {
+            b.click();
+            clicked++;
+          }
+        }
+        
+        return { clicked };
+      });
+      
+      log('🔧','MAINT',`Clicked ${repairResult.clicked} repair/A-check buttons`);
+      await sleep(2000);
+      
+      // Step 4: Also try the bulk A-check AJAX endpoint
+      const bulkResult = await page.evaluate(() => {
+        return new Promise(resolve => {
+          const xhr = new XMLHttpRequest();
+          xhr.onreadystatechange = function() {
+            if (this.readyState === 4) {
+              resolve({ status: this.status, text: this.responseText.slice(0, 200) });
+            }
+          };
+          // Try bulk A-check endpoint
+          xhr.open('GET', 'maintenance.php?mode=do_all', true);
+          xhr.send();
+        });
+      });
+      
+      log('🔧','MAINT',`Bulk A-check response: ${bulkResult.status}`);
+      
+      await tg.send([
+        `🔧 <b>Maintenance Alert!</b>`,
+        `✈️ Fleet: ${stats.fleetSize} aircraft`,
+        `⚠️ Worn: ${stats.worn}`,
+        `🔧 A-checks due: ${stats.acheckDue}`,
+        `✅ Repair buttons clicked: ${repairResult.clicked}`,
+        `📊 Bulk repair status: ${bulkResult.status}`,
+      ].join('\n'));
     } else {
-      log('ℹ️','MAINT','All aircraft in good condition');
+      log('✅','MAINT','All aircraft in good condition');
     }
 
     try { await page.evaluate(() => { if (typeof closePop==='function') closePop(); }); } catch(e) {}
