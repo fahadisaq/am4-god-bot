@@ -25,6 +25,7 @@ const { checkRanking } = require('./rivals');
 // const { checkSmartLoan, checkAndRepayLoan } = require('./loans'); // DISABLED — user has no loan
 const { checkScreenshotDashboard } = require('./screenshotDash');
 const { checkAndFixRoutes, repairAllAircraft } = require('./routeManager');
+const { optimizeAllRoutes } = require('./ticketOptimizer');
 const priceMemory = require('./priceMemory');
 const reporter = require('./reporter');
 const commander = require('./commander');
@@ -121,6 +122,9 @@ async function main() {
     await sleep(1000);
     // Fix empty planes on startup
     await checkAndFixRoutes(page);
+    await sleep(1000);
+    // God-level ticket pricing on startup
+    await optimizeAllRoutes(page);
     lastRouteFix = Date.now();
     lastExtrasCheck = Date.now();
 
@@ -255,6 +259,9 @@ async function main() {
           await checkAndFixRoutes(page);
           await sleep(1000);
           await repairAllAircraft(page);
+          await sleep(1000);
+          // God-level ticket pricing optimization
+          await optimizeAllRoutes(page);
           lastRouteFix = Date.now();
         } catch(e) {
           log('⚠️','ROUTES',e.message);

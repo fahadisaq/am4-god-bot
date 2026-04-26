@@ -3,6 +3,7 @@
 // ============================================================
 
 const tg = require('./telegram');
+const priceMemory = require('./priceMemory');
 
 const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 700;
 const CO2_THRESHOLD = parseInt(process.env.CO2_THRESHOLD) || 140;
@@ -92,6 +93,9 @@ async function checkFuel(page, bankBalance) {
     const price = parseInt(fd.price.replace(/[^0-9]/g,''));
     const cap = parseInt((fd.capacity||'0').replace(/[^0-9]/g,''))||0;
     log('⛽','FUEL',`Price: $${price} | Capacity: ${cap.toLocaleString()} lbs | Has input: ${fd.hasInput}`);
+
+    // Record to persistent price memory
+    priceMemory.recordPrice('fuel', price);
 
     if (price <= FUEL_THRESHOLD && cap > 0) {
       // Calculate how much we can buy
@@ -223,6 +227,9 @@ async function checkCO2(page, bankBalance) {
     const price = parseInt(cd.price.replace(/[^0-9]/g,''));
     const cap = parseInt((cd.capacity||'0').replace(/[^0-9]/g,''))||0;
     log('🌿','CO2',`Price: $${price} | Capacity: ${cap.toLocaleString()}`);
+
+    // Record to persistent price memory
+    priceMemory.recordPrice('co2', price);
 
     if (price <= CO2_THRESHOLD && cap > 0) {
       let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
