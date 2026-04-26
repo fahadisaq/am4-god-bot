@@ -21,19 +21,32 @@ const { checkFuel, checkCO2 } = require('./fuel');
 const { collectBonus, doMaintenance } = require('./extras');
 const { checkFleetExpansion } = require('./fleet');
 const { scrapeRoutes, getRouteReport } = require('./routes');
+const { checkRanking } = require('./rivals');
+const { checkSmartLoan, checkAndRepayLoan } = require('./loans');
+const { checkScreenshotDashboard } = require('./screenshotDash');
 const priceMemory = require('./priceMemory');
 const reporter = require('./reporter');
 const commander = require('./commander');
 const tg = require('./telegram');
 
 // ── Config ──
-const CYCLE_INTERVAL_MS      = 5  * 60 * 1000;  // 5 min
+const MIN_CYCLE_MS           = 4  * 60 * 1000 + 20 * 1000; // 4m 20s
+const MAX_CYCLE_MS           = 5  * 60 * 1000 + 40 * 1000; // 5m 40s
 const FUEL_CHECK_INTERVAL_MS = 30 * 60 * 1000;  // 30 min
 const EXTRAS_INTERVAL_MS     = 60 * 60 * 1000;  // 60 min
 const SUMMARY_INTERVAL_MS    = 30 * 60 * 1000;  // 30 min
 const ROUTE_SCRAPE_INTERVAL  = 2  * 60 * 60 * 1000; // 2 hours
 const FLEET_CHECK_INTERVAL   = 60 * 60 * 1000;  // 1 hour
+const RIVALS_CHECK_INTERVAL  = 2  * 60 * 60 * 1000; // 2 hours
 const TOTAL_RUNTIME_MS       = (5 * 60 + 50) * 60 * 1000; // 5h50m
+
+// Anti-detection: randomise sleep between 4m20s and 5m40s
+function randomCycleSleep() {
+  const ms = Math.floor(Math.random() * (MAX_CYCLE_MS - MIN_CYCLE_MS + 1)) + MIN_CYCLE_MS;
+  const secs = Math.round(ms / 1000);
+  log('😴','LOOP',`Anti-detection sleep: ${Math.floor(secs/60)}m ${secs%60}s`);
+  return sleep(ms);
+}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function log(icon, module, msg) {
@@ -81,6 +94,7 @@ async function main() {
     let lastExtrasCheck = 0;
     let lastSummary = 0;
     let lastRouteScrape = 0;
+    let lastRivalsCheck = 0;
     let lastFuelPrice = 0;
     let lastCO2Price = 0;
 
@@ -209,11 +223,35 @@ async function main() {
         }
       }
 
+      // ── Competitor rank tracking (every 2 hours) ──
+      if (Date.now() - lastRivalsCheck >= RIVALS_CHECK_INTERVAL) {
+        try {
+          await checkRanking(page);
+          lastRivalsCheck = Date.now();
+        } catch(e) {
+          log('⚠️','RIVALS',e.message);
+        }
+      }
+
       // ── Auto fleet expansion (every hour) ──
       try {
         await checkFleetExpansion(page, bankBalance);
       } catch(e) {
         log('⚠️','FLEET',e.message);
+      }
+
+      // ── Smart loan manager (every 30 min, only on extreme fuel dips) ──
+      try {
+        await checkSmartLoan(page, bankBalance, lastFuelPrice);
+      } catch(e) {
+        log('⚠️','LOANS',e.message);
+      }
+
+      // ── Screenshot dashboard (every 30 min) ──
+      try {
+        await checkScreenshotDashboard(page, cycleCount, bankBalance, totalDeparted);
+      } catch(e) {
+        log('⚠️','SCREENSHOT',e.message);
       }
 
       // ── Telegram summary (every 30 min) ──
@@ -240,13 +278,12 @@ async function main() {
 
       // ── Check time remaining ──
       const timeLeft = TOTAL_RUNTIME_MS - (Date.now()-startTime);
-      if (timeLeft < CYCLE_INTERVAL_MS) {
+      if (timeLeft < MAX_CYCLE_MS) {
         log('🏁','LOOP',`Only ${Math.floor(timeLeft/1000)}s left — ending loop.`);
         break;
       }
 
-      log('😴','LOOP','Sleeping 5 minutes...');
-      await sleep(CYCLE_INTERVAL_MS);
+      await randomCycleSleep();
     }
 
     // ── Shutdown ──

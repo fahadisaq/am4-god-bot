@@ -1,0 +1,40 @@
+name: AM4 Bot — Crash Recovery
+
+on:
+  # Triggers when the main am4-bot workflow completes
+  workflow_run:
+    workflows: ["AM4 God Bot — 24/7 Auto Player"]
+    types:
+      - completed
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    # Only restart if the main bot FAILED (not if it succeeded normally)
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+
+    steps:
+      - name: Notify crash via Telegram
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"chat_id\": \"${{ secrets.TELEGRAM_CHAT_ID }}\",
+              \"text\": \"🚨 <b>Bot Crashed!</b>\\n⚠️ Main session failed\\n🔄 Auto-restarting now...\\n⏰ $(date -u)\",
+              \"parse_mode\": \"HTML\"
+            }"
+
+      - name: Wait 2 minutes before restart
+        run: sleep 120
+
+      - name: Trigger new bot session
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'am4-bot.yml',
+              ref: 'main'
+            });
+            console.log('✅ New bot session triggered!');
