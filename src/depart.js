@@ -229,7 +229,7 @@ async function departAll(page) {
     }
   }
 
-  return departed;
+  return actualDeparted;
 }
 
 module.exports = { departAll };

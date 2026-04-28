@@ -183,17 +183,25 @@ async function checkFuel(page, bankBalance) {
     //   BULK   = price is cheap (or dip) → fill as much as possible
     //   SURVIVAL = price is expensive BUT tank is dangerously low → buy JUST enough to keep flying
     //   SKIP   = price is expensive and tank is fine → wait for cheaper prices
+    //   EMERGENCY = bank is broke AND tank is 0% → buy TINY amount just to keep some planes flying
     let buyMode = 'SKIP';
     if ((isBelowThreshold || isDip) && cap > 0) {
       buyMode = 'BULK';
     } else if (isCritical && cap > 0) {
       // SURVIVAL checks:
-      // 1. Bank must be above $1M floor
+      // 1. Bank must be above $1M floor for normal survival
       // 2. Must wait 1 hour between survival buys (prevent drain)
       const timeSinceLastSurvival = Date.now() - lastSurvivalBuy;
       if (bankBalance < SURVIVAL_BANK_FLOOR) {
-        log('🛑', 'FUEL', `Bank $${bankBalance.toLocaleString()} is below $1M floor — REFUSING to buy expensive fuel!`);
-        buyMode = 'SKIP';
+        // Bank is below $1M — but if tank is literally 0%, we MUST buy a tiny amount
+        // or the airline dies completely (no flights = no revenue = game over)
+        if (stored === 0 && bankBalance > 50000) {
+          buyMode = 'EMERGENCY';
+          log('🆘', 'FUEL', `EMERGENCY: Bank low ($${bankBalance.toLocaleString()}) but tank is EMPTY! Buying tiny amount to keep airline alive`);
+        } else {
+          log('🛑', 'FUEL', `Bank $${bankBalance.toLocaleString()} is below $1M floor — REFUSING to buy expensive fuel!`);
+          buyMode = 'SKIP';
+        }
       } else if (timeSinceLastSurvival < SURVIVAL_COOLDOWN) {
         const minsLeft = Math.round((SURVIVAL_COOLDOWN - timeSinceLastSurvival) / 60000);
         log('⏳', 'FUEL', `Survival cooldown: ${minsLeft}m left — skipping to prevent bank drain`);
@@ -232,6 +240,15 @@ async function checkFuel(page, bankBalance) {
         toBuy = Math.min(needed, canAfford, cap);
         lastSurvivalBuy = Date.now();
         log('🚨', 'FUEL', `SURVIVAL BUY: Tank at ${Math.round(tankPct * 100)}%! Spending max $${actualMaxSpend.toLocaleString()} (5% of bank, floor $1M)`);
+
+      } else if (buyMode === 'EMERGENCY') {
+        // EMERGENCY: bank is broke but tank is EMPTY — buy just enough for a few flights
+        // Max spend: $50K or 2% of bank, whichever is less
+        const emergencyBudget = Math.min(50000, Math.floor(bankBalance * 0.02));
+        const canAfford = Math.floor(emergencyBudget / price * 1000);
+        toBuy = Math.min(canAfford, cap);
+        lastSurvivalBuy = Date.now();
+        log('🆘', 'FUEL', `EMERGENCY BUY: Spending max $${emergencyBudget.toLocaleString()} (just enough for a few flights to earn revenue)`);
       }
 
       if (toBuy > 10) {
