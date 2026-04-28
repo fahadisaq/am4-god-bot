@@ -117,15 +117,41 @@ async function departAll(page) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = toDepart;
     try {
-      await page.evaluate(() => {
-        const el = document.getElementById('listDepartAmount');
-        if (el?.parentElement) {
+      // Use direct XHR — same endpoint from the captured network traffic
+      const departResult = await page.evaluate(() => {
+        return new Promise(resolve => {
+          // Set the global flag AM4 expects
           window.depAllAirc = true;
-          typeof window.Ajax==='function'
-            ? window.Ajax('route_depart.php?mode=all&ids=x','runme',el.parentElement)
-            : el.parentElement.click();
-        }
+          
+          const xhr = new XMLHttpRequest();
+          xhr.onreadystatechange = function() {
+            if (this.readyState === 4) {
+              resolve({ status: this.status, text: this.responseText.slice(0, 500) });
+            }
+          };
+          xhr.open('GET', `route_depart.php?mode=all&ids=x&fbSig=false&_=${Date.now()}`, true);
+          xhr.send();
+        });
       });
+      
+      log('✈️','DEPART',`Attempt ${attempt}: XHR status=${departResult.status}`);
+      
+      // Log relevant parts of response
+      if (departResult.text) {
+        // Check for toast messages in the response
+        const toastMatch = departResult.text.match(/toast\s*\([^)]*'([^']*)'[^)]*'([^']*)'/);
+        if (toastMatch) {
+          log('📢','DEPART',`Server says: [${toastMatch[1]}] ${toastMatch[2]}`);
+        }
+        // Check for depart sound (means at least some departed)
+        if (departResult.text.includes("playSound('depart')")) {
+          log('✅','DEPART',`Attempt ${attempt}: Depart sound triggered — flights sent!`);
+        }
+        // Check for error
+        if (departResult.text.includes('error') || departResult.text.includes('Error')) {
+          log('⚠️','DEPART',`Response: ${departResult.text.slice(0, 200)}`);
+        }
+      }
     } catch(e) { log('⚠️','DEPART',e.message); }
 
     await sleep(5000);
