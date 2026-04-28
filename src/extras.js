@@ -1,5 +1,10 @@
 // ============================================================
 //  BONUS + MAINTENANCE + ALLIANCE MODULE
+//  Real AM4 endpoints (captured from live XHR):
+//    maintenance_main.php — opens maintenance popup
+//    #popContent — the popup container
+//    maintDetails(MAINT_ID) — per-aircraft repair page
+//    maint_plan.php — Plan Maintenance
 // ============================================================
 
 const tg = require('./telegram');
@@ -45,75 +50,38 @@ async function collectBonus(page) {
 async function doMaintenance(page) {
   log('🔧','MAINT','Checking aircraft maintenance...');
   try {
-    // Open maintenance page
+    // Step 1: Open maintenance popup (CORRECT URL: maintenance_main.php)
     await page.evaluate(() => {
-      if (typeof popup === 'function') popup('maintenance.php', 'Maintenance', false, false, true);
+      if (typeof popup === 'function') popup('maintenance_main.php', 'Maintenance', false, false, true);
     });
     await sleep(3000);
 
-    // Step 1: Read the maintenance summary from the popup
+    // Step 2: Read stats from #popContent (CORRECT ID)
     const stats = await page.evaluate(() => {
-      const popup = document.getElementById('popMain') 
-        || document.querySelector('.popup-content')
-        || document.getElementById('popContent');
+      const pop = document.getElementById('popContent');
+      if (!pop) return { error: 'No #popContent found' };
       
-      if (!popup) return { error: 'No popup found' };
+      const text = pop.innerText || '';
+      const html = pop.innerHTML || '';
       
-      const text = popup.innerText || '';
-      const html = popup.innerHTML || '';
-      
-      // Parse the stats: "Fleet size 97  At hub 11  Worn A/C 18  A check due 3"
       const wornMatch = text.match(/worn\s*a\/?c\s*(\d+)/i);
       const acheckMatch = text.match(/a\s*check\s*due\s*(\d+)/i);
       const fleetMatch = text.match(/fleet\s*size\s*(\d+)/i);
       
-      // Extract aircraft IDs from the maintenance popup HTML
-      // Look for patterns like: maintenance.php?id=124103883, aircraft ID references, onclick handlers
-      const aircraftIds = [];
-      const idPatterns = [
-        /maintenance\.php\?[^'"]*id=(\d+)/gi,
-        /acheck[^'"]*?(\d{6,})/gi,
-        /repair[^'"]*?(\d{6,})/gi,
-        /doCheck\s*\(\s*(\d+)/gi,
-        /doRepair\s*\(\s*(\d+)/gi,
-        /aircraft[^'"]*?(\d{6,})/gi,
-      ];
-      
-      for (const pattern of idPatterns) {
-        let match;
-        while ((match = pattern.exec(html)) !== null) {
-          if (!aircraftIds.includes(match[1])) aircraftIds.push(match[1]);
-        }
+      // Extract maintDetails IDs — the real maintenance IDs
+      const maintIds = [];
+      const maintPattern = /maintDetails\s*\(\s*(\d+)\s*\)/gi;
+      let m;
+      while ((m = maintPattern.exec(html)) !== null) {
+        if (!maintIds.includes(m[1])) maintIds.push(m[1]);
       }
-      
-      // Also look for ALL onclick attributes containing IDs
-      const allOnclicks = [];
-      popup.querySelectorAll('[onclick]').forEach(el => {
-        allOnclicks.push(el.getAttribute('onclick'));
-      });
-      
-      // Find all buttons with their text + onclick for debugging
-      const buttons = [];
-      popup.querySelectorAll('button, a.btn, [onclick], .btn, a[href]').forEach(b => {
-        buttons.push({
-          text: (b.textContent || '').trim().slice(0, 50),
-          onclick: (b.getAttribute('onclick') || '').slice(0, 100),
-          href: (b.getAttribute('href') || '').slice(0, 100),
-          tag: b.tagName,
-          classes: b.className || '',
-        });
-      });
       
       return {
         worn: wornMatch ? parseInt(wornMatch[1]) : 0,
         acheckDue: acheckMatch ? parseInt(acheckMatch[1]) : 0,
         fleetSize: fleetMatch ? parseInt(fleetMatch[1]) : 0,
-        hasWarning: text.toLowerCase().includes('poorly maintained') || text.toLowerCase().includes('warning'),
-        textSnippet: text.slice(0, 500),
-        htmlSnippet: html.slice(0, 1000),
-        aircraftIds,
-        buttons: buttons.slice(0, 20),
-        onclicks: allOnclicks.slice(0, 10),
+        hasWarning: text.includes('poorly maintained'),
+        maintIds,
       };
     });
 
@@ -123,134 +91,94 @@ async function doMaintenance(page) {
     }
 
     log('🔧','MAINT',`Fleet: ${stats.fleetSize} | Worn: ${stats.worn} | A-check due: ${stats.acheckDue}`);
-    log('🔍','MAINT',`Found ${stats.aircraftIds?.length || 0} aircraft IDs in popup`);
-    log('🔍','MAINT',`Found ${stats.buttons?.length || 0} buttons in popup`);
-    
-    // Debug: log what buttons exist
-    if (stats.buttons?.length > 0) {
-      stats.buttons.slice(0, 5).forEach((b, i) => {
-        log('🔍','MAINT',`  Button[${i}]: "${b.text}" | onclick="${b.onclick}" | tag=${b.tag}`);
-      });
-    }
-    
-    // Debug: log onclick handlers
-    if (stats.onclicks?.length > 0) {
-      stats.onclicks.slice(0, 3).forEach((oc, i) => {
-        log('🔍','MAINT',`  Onclick[${i}]: ${oc}`);
-      });
-    }
+    log('🔍','MAINT',`maintDetails IDs: [${(stats.maintIds || []).join(', ')}]`);
 
     if (stats.acheckDue > 0 || stats.worn > 0) {
       log('⚠️','MAINT',`${stats.acheckDue} A-checks needed, ${stats.worn} worn aircraft!`);
-      
-      let totalRepaired = 0;
 
-      // ── Strategy 1: Try bulk endpoints ──
-      const bulkEndpoints = [
-        'maintenance.php?mode=do_all',
-        'maintenance.php?mode=doAll',
-        'maintenance.php?mode=do_all&fbSig=false',
-        'maintenance.php?mode=check_all&fbSig=false',
-      ];
-      
-      for (const endpoint of bulkEndpoints) {
-        const result = await page.evaluate((url) => {
-          return new Promise(resolve => {
-            const xhr = new XMLHttpRequest();
-            xhr.onreadystatechange = function() {
-              if (this.readyState === 4) {
-                resolve({ status: this.status, text: this.responseText.slice(0, 500) });
-              }
-            };
-            xhr.open('GET', url, true);
-            xhr.send();
-          });
-        }, endpoint);
-        
-        log('🔧','MAINT',`Endpoint ${endpoint}: status=${result.status} response="${result.text.slice(0, 150)}"`);
-        
-        // If response contains success indicators, count it
-        if (result.status === 200 && !result.text.includes('error') && result.text.length > 10) {
-          totalRepaired++;
-        }
-        await sleep(500);
-      }
+      // Strategy 1: Trigger "Plan Maintenance" via XHR
+      log('🔧','MAINT','Triggering Plan Maintenance...');
+      const planResult = await page.evaluate(() => {
+        return new Promise(resolve => {
+          const xhr = new XMLHttpRequest();
+          xhr.onreadystatechange = function() {
+            if (this.readyState === 4) resolve({ status: this.status, text: this.responseText.slice(0, 500) });
+          };
+          xhr.open('GET', 'maint_plan.php', true);
+          xhr.send();
+        });
+      });
+      log('🔧','MAINT',`Plan response: ${planResult.status} | ${planResult.text.slice(0, 150)}`);
+      await sleep(1000);
 
-      // ── Strategy 2: Repair individual aircraft by ID ──
-      if (stats.aircraftIds && stats.aircraftIds.length > 0) {
-        log('🔧','MAINT',`Attempting individual repairs for ${stats.aircraftIds.length} aircraft...`);
+      // Strategy 2: Open each aircraft's repair page via maint_detail.php
+      if (stats.maintIds && stats.maintIds.length > 0) {
+        log('🔧','MAINT',`Checking repair pages for ${stats.maintIds.length} aircraft...`);
         
-        for (const acId of stats.aircraftIds.slice(0, 40)) { // Cap at 40 to avoid rate limiting
-          const repairResult = await page.evaluate((id) => {
+        for (const maintId of stats.maintIds) {
+          const detail = await page.evaluate((id) => {
             return new Promise(resolve => {
               const xhr = new XMLHttpRequest();
               xhr.onreadystatechange = function() {
                 if (this.readyState === 4) {
-                  resolve({ status: this.status, text: this.responseText.slice(0, 200) });
+                  const text = this.responseText;
+                  // Find Ajax endpoints in the response
+                  const ajaxUrls = [];
+                  const ajaxP = /Ajax\s*\(\s*'([^']+)'/gi;
+                  let m;
+                  while ((m = ajaxP.exec(text)) !== null) ajaxUrls.push(m[1]);
+                  
+                  resolve({
+                    status: this.status,
+                    snippet: text.slice(0, 300),
+                    ajaxUrls,
+                    hasRepair: text.includes('Bulk repair') || text.includes('Plan repair'),
+                  });
                 }
               };
-              xhr.open('GET', `maintenance.php?mode=do&id=${id}&fbSig=false`, true);
+              xhr.open('GET', `maint_detail.php?id=${id}`, true);
               xhr.send();
             });
-          }, acId);
+          }, maintId);
           
-          if (repairResult.status === 200 && !repairResult.text.includes('error')) {
-            totalRepaired++;
-          }
-          await sleep(300); // Small delay between repairs
+          log('🔧','MAINT',`  ID ${maintId}: ${detail.status} | repair=${detail.hasRepair} | ajax=[${detail.ajaxUrls.join(',')}]`);
+          log('🔍','MAINT',`  ${detail.snippet.slice(0, 150)}`);
+          await sleep(500);
         }
-        log('🔧','MAINT',`Individual repairs attempted: ${stats.aircraftIds.length}`);
       }
 
-      // ── Strategy 3: Click any repair/A-check buttons in the UI ──
-      // First try expanding the list
+      // Strategy 3: Click "Plan Maintenance" in the popup UI
       await page.evaluate(() => {
-        const popup = document.getElementById('popMain') || document.querySelector('.popup-content');
-        if (!popup) return;
-        const btns = popup.querySelectorAll('button, a, [onclick], .btn');
-        for (const b of btns) {
+        const pop = document.getElementById('popContent');
+        if (!pop) return;
+        pop.querySelectorAll('button').forEach(b => {
           const t = (b.textContent || '').toLowerCase();
-          if (t.includes('show') || t.includes('detail') || t.includes('expand') || t.includes('list')) {
-            b.click();
-            break;
-          }
-        }
+          if (t.includes('show detail')) b.click();
+        });
       });
-      await sleep(2000);
+      await sleep(1500);
       
-      const clickResult = await page.evaluate(() => {
-        const popup = document.getElementById('popMain') || document.querySelector('.popup-content') || document.body;
+      const uiClicks = await page.evaluate(() => {
+        const pop = document.getElementById('popContent');
+        if (!pop) return { clicked: 0 };
         let clicked = 0;
-        
-        // Click ALL buttons that look like repair/maintenance actions
-        const allElements = popup.querySelectorAll('button, a, [onclick], .btn, [class*="btn"]');
-        for (const b of allElements) {
+        pop.querySelectorAll('button, [onclick]').forEach(b => {
           const t = (b.textContent || '').toLowerCase();
-          const oc = (b.getAttribute('onclick') || '').toLowerCase();
-          const href = (b.getAttribute('href') || '').toLowerCase();
-          
-          if (t.includes('a-check') || t.includes('a check') || t.includes('check all') ||
-              t.includes('repair') || t.includes('maintain') || t.includes('fix') ||
-              oc.includes('acheck') || oc.includes('docheck') || oc.includes('repair') ||
-              oc.includes('maintenance') || oc.includes('do_all') ||
-              href.includes('maintenance') || href.includes('acheck')) {
+          const oc = (b.getAttribute('onclick') || '');
+          if (t.includes('plan maintenance') || t.includes('plan repair') ||
+              t.includes('bulk repair') || oc.includes('maint_plan')) {
             b.click();
             clicked++;
           }
-        }
+        });
         return { clicked };
       });
-      
-      log('🔧','MAINT',`UI buttons clicked: ${clickResult.clicked}`);
-      
+      log('🔧','MAINT',`UI buttons clicked: ${uiClicks.clicked}`);
+
       await tg.send([
         `🔧 <b>Maintenance Report</b>`,
-        `✈️ Fleet: ${stats.fleetSize} aircraft`,
-        `⚠️ Worn: ${stats.worn} | A-checks due: ${stats.acheckDue}`,
-        `🔧 Aircraft IDs found: ${stats.aircraftIds?.length || 0}`,
-        `✅ Bulk endpoints tried: ${bulkEndpoints.length}`,
-        `✅ Individual repairs: ${stats.aircraftIds?.length || 0}`,
-        `✅ UI buttons clicked: ${clickResult.clicked}`,
+        `✈️ Fleet: ${stats.fleetSize} | ⚠️ Worn: ${stats.worn} | A-check: ${stats.acheckDue}`,
+        `🔧 IDs found: ${stats.maintIds?.length || 0} | UI clicks: ${uiClicks.clicked}`,
       ].join('\n'));
     } else {
       log('✅','MAINT','All aircraft in good condition');
