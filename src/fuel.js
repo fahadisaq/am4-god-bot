@@ -13,7 +13,10 @@ const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 700;   // Bulk bu
 const CO2_THRESHOLD = parseInt(process.env.CO2_THRESHOLD) || 110;
 const MIN_BANK_BALANCE = parseInt(process.env.MIN_BANK_BALANCE) || 500000;
 const CRITICAL_TANK_PCT = 0.20;   // Below 20% = survival buy kicks in
-const SURVIVAL_FILL_PCT = 0.30;   // In survival mode, buy just enough to reach 30%
+const SURVIVAL_FILL_PCT = 0.25;   // In survival mode, buy just enough to reach 25% (was 30%)
+const SURVIVAL_BANK_FLOOR = 1000000; // NEVER let bank go below $1M for fuel
+const SURVIVAL_COOLDOWN = 60 * 60 * 1000; // Only survival-buy once per hour
+let lastSurvivalBuy = 0; // Timestamp of last survival purchase
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function log(icon, module, msg) {
@@ -184,10 +187,23 @@ async function checkFuel(page, bankBalance) {
     if ((isBelowThreshold || isDip) && cap > 0) {
       buyMode = 'BULK';
     } else if (isCritical && cap > 0) {
-      buyMode = 'SURVIVAL';
+      // SURVIVAL checks:
+      // 1. Bank must be above $1M floor
+      // 2. Must wait 1 hour between survival buys (prevent drain)
+      const timeSinceLastSurvival = Date.now() - lastSurvivalBuy;
+      if (bankBalance < SURVIVAL_BANK_FLOOR) {
+        log('🛑', 'FUEL', `Bank $${bankBalance.toLocaleString()} is below $1M floor — REFUSING to buy expensive fuel!`);
+        buyMode = 'SKIP';
+      } else if (timeSinceLastSurvival < SURVIVAL_COOLDOWN) {
+        const minsLeft = Math.round((SURVIVAL_COOLDOWN - timeSinceLastSurvival) / 60000);
+        log('⏳', 'FUEL', `Survival cooldown: ${minsLeft}m left — skipping to prevent bank drain`);
+        buyMode = 'SKIP';
+      } else {
+        buyMode = 'SURVIVAL';
+      }
     }
 
-    log('📊', 'FUEL', `Tank: ${Math.round(tankPct * 100)}% | Mode: ${buyMode} | Price: $${price} | Threshold: $${FUEL_THRESHOLD} | Dip: ${isDip}`);
+    log('📊', 'FUEL', `Tank: ${Math.round(tankPct * 100)}% | Mode: ${buyMode} | Price: $${price} | Bank: $${bankBalance.toLocaleString()} | Threshold: $${FUEL_THRESHOLD}`);
 
     if (buyMode !== 'SKIP') {
       let toBuy = 0;
@@ -204,15 +220,18 @@ async function checkFuel(page, bankBalance) {
 
       } else if (buyMode === 'SURVIVAL') {
         // SURVIVAL: price is high but we NEED fuel to keep planes flying
-        // Only buy enough to get from current level to 30% — just enough to survive
+        // Only buy enough to get from current level to 25%
         const targetFuel = Math.floor(totalCap * SURVIVAL_FILL_PCT);
         const needed = Math.max(0, targetFuel - stored);
-        const survivalCost = Math.round(needed * price / 1000);
-        // Cap spending at 15% of bank — don't blow the bank on expensive fuel
-        const maxSpend = Math.floor(bankBalance * 0.15);
-        const canAfford = Math.floor(maxSpend / price * 1000);
+        // Cap spending at 5% of bank (was 15%) — preserve cash!
+        const maxSpend = Math.floor(bankBalance * 0.05);
+        // Also enforce the bank floor
+        const maxBeforeFloor = Math.max(0, bankBalance - SURVIVAL_BANK_FLOOR);
+        const actualMaxSpend = Math.min(maxSpend, maxBeforeFloor);
+        const canAfford = Math.floor(actualMaxSpend / price * 1000);
         toBuy = Math.min(needed, canAfford, cap);
-        log('🚨', 'FUEL', `SURVIVAL BUY: Tank at ${Math.round(tankPct * 100)}%! Need ${needed.toLocaleString()} lbs to reach 30%. Spending max $${maxSpend.toLocaleString()} (15% of bank)`);
+        lastSurvivalBuy = Date.now();
+        log('🚨', 'FUEL', `SURVIVAL BUY: Tank at ${Math.round(tankPct * 100)}%! Spending max $${actualMaxSpend.toLocaleString()} (5% of bank, floor $1M)`);
       }
 
       if (toBuy > 10) {
