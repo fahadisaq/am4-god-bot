@@ -113,6 +113,9 @@ async function departAll(page) {
 
   log('✈️','DEPART',`${toDepart} flight(s) ready!`);
   const originalCount = toDepart;
+  let departedWithDamaged = false;
+  let realDeparted = 0;
+  let departResult = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = toDepart;
@@ -151,6 +154,18 @@ async function departAll(page) {
         if (departResult.text.includes('error') || departResult.text.includes('Error')) {
           log('⚠️','DEPART',`Response: ${departResult.text.slice(0, 200)}`);
         }
+        
+        // Detect damaged aircraft — these CAN'T depart and shouldn't count as failures
+        if (departResult.text.includes('damaged and cannot be operated')) {
+          departedWithDamaged = true;
+        }
+        
+        // Count actual departures from response (each removeFromArray = 1 departed flight)
+        const removeCount = (departResult.text.match(/removeFromArray/g) || []).length;
+        if (removeCount > 0) {
+          realDeparted += removeCount;
+          log('✅','DEPART',`Attempt ${attempt}: Server confirmed ${removeCount} aircraft dispatched`);
+        }
       }
     } catch(e) { log('⚠️','DEPART',e.message); }
 
@@ -162,40 +177,55 @@ async function departAll(page) {
 
     if (before - toDepart > 0) log('✅','DEPART',`Attempt ${attempt}: Departed ${before-toDepart}!`);
     if (toDepart <= 0) break;
+    
+    // If server said "all inflight or unable" — no point retrying
+    if (departResult && departResult.text && departResult.text.includes('All aircraft are inflight or unable')) {
+      log('ℹ️','DEPART','Server says all aircraft inflight or unable — stopping retries');
+      break;
+    }
+    
     try { await page.evaluate(() => { if (typeof closePop==='function') closePop(); }); } catch(e) {}
     await sleep(1500);
   }
 
-  const departed = originalCount - toDepart;
-  if (departed > 0) {
-    log('✅','DEPART',`Total departed: ${departed}`);
-    await tg.departed(departed);
+  // Calculate real results
+  const counterDeparted = originalCount - toDepart;
+  const actualDeparted = Math.max(counterDeparted, realDeparted);
+  
+  if (actualDeparted > 0 || realDeparted > 0) {
+    log('✅','DEPART',`Total departed: ${actualDeparted} (counter: ${counterDeparted}, server: ${realDeparted})`);
+    await tg.departed(actualDeparted);
     consecutiveFailCycles = 0;
   }
   
   if (toDepart > 0) {
-    log('❌','DEPART',`${toDepart} failed to depart`);
-    
-    // Track consecutive failures — if most flights fail, page may be stuck
-    const failRate = toDepart / originalCount;
-    if (failRate >= 0.8) {
-      consecutiveFailCycles++;
-      log('⚠️','DEPART',`High fail rate (${Math.round(failRate*100)}%) — streak: ${consecutiveFailCycles}/3`);
-      
-      // After 3 consecutive high-fail cycles, reload the page
-      if (consecutiveFailCycles >= 3) {
-        log('🔄','DEPART','Page stuck! Reloading to fix...');
-        try {
-          await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
-          await sleep(5000);
-          consecutiveFailCycles = 0;
-          log('✅','DEPART','Page reloaded — should fix departures next cycle');
-        } catch(e) {
-          log('❌','DEPART',`Reload failed: ${e.message}`);
-        }
-      }
-    } else {
+    if (departedWithDamaged) {
+      // These are damaged aircraft — not a bot failure, just need maintenance
+      log('🔧','DEPART',`${toDepart} aircraft couldn't depart — they are DAMAGED (need A-check/repair)`);
+      // Don't count damaged aircraft as a failure streak
       consecutiveFailCycles = 0;
+    } else {
+      log('❌','DEPART',`${toDepart} failed to depart`);
+      
+      const failRate = toDepart / originalCount;
+      if (failRate >= 0.8) {
+        consecutiveFailCycles++;
+        log('⚠️','DEPART',`High fail rate (${Math.round(failRate*100)}%) — streak: ${consecutiveFailCycles}/3`);
+        
+        if (consecutiveFailCycles >= 3) {
+          log('🔄','DEPART','Page stuck! Reloading to fix...');
+          try {
+            await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+            await sleep(5000);
+            consecutiveFailCycles = 0;
+            log('✅','DEPART','Page reloaded — should fix departures next cycle');
+          } catch(e) {
+            log('❌','DEPART',`Reload failed: ${e.message}`);
+          }
+        }
+      } else {
+        consecutiveFailCycles = 0;
+      }
     }
   }
 
