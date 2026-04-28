@@ -18,7 +18,7 @@ const puppeteer = require('puppeteer');
 const { login, ensureLoggedIn } = require('./login');
 const { departAll } = require('./depart');
 const { checkFuel, checkCO2 } = require('./fuel');
-const { collectBonus, doMaintenance, contributeAlliance } = require('./extras');
+const { collectBonus, doMaintenance, contributeAlliance, doResearch, claimAdReward, checkEvents, mysteryEndpoint } = require('./extras');
 const { checkFleetExpansion } = require('./fleet');
 const { scrapeRoutes, getRouteReport } = require('./routes');
 const { checkRanking } = require('./rivals');
@@ -120,6 +120,13 @@ async function main() {
     await doMaintenance(page);
     await sleep(1000);
     await repairAllAircraft(page);
+    await sleep(1000);
+    // Free rewards
+    await claimAdReward(page);
+    await sleep(1000);
+    await checkEvents(page);
+    await sleep(1000);
+    await mysteryEndpoint(page);
     await sleep(1000);
     // Fix empty planes on startup
     await checkAndFixRoutes(page);

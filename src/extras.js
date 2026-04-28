@@ -237,4 +237,103 @@ async function doResearch(page) {
   }
 }
 
-module.exports = { collectBonus, doMaintenance, contributeAlliance, doResearch };
+// ── FREE AD REWARD (yodo.php) ─────────────────────────────────
+// Captured from: Ajax('yodo.php?reward=4','runme')
+// Claims video ad reward without needing to watch the ad
+async function claimAdReward(page) {
+  log('🎬','AD-REWARD','Claiming free ad reward...');
+  try {
+    const result = await page.evaluate(() => {
+      return new Promise(resolve => {
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+          if (this.readyState === 4) resolve({ status: this.status, text: this.responseText.slice(0, 300) });
+        };
+        xhr.open('GET', 'yodo.php?reward=4', true);
+        xhr.send();
+      });
+    });
+    
+    if (result.status === 200 && result.text.length > 5) {
+      log('💰','AD-REWARD',`Reward claimed! Response: ${result.text.slice(0, 150)}`);
+    } else {
+      log('ℹ️','AD-REWARD',`Status: ${result.status} | ${result.text.slice(0, 100)}`);
+    }
+  } catch(e) {
+    log('⚠️','AD-REWARD',e.message);
+  }
+}
+
+// ── EVENT REWARDS ─────────────────────────────────────────────
+// Check events page for any claimable rewards
+async function checkEvents(page) {
+  log('🎉','EVENTS','Checking for event rewards...');
+  try {
+    await page.evaluate(() => {
+      if (typeof popup === 'function') popup('events_main.php', 'Events');
+    });
+    await sleep(3000);
+    
+    const result = await page.evaluate(() => {
+      const pop = document.getElementById('popContent');
+      if (!pop) return { error: 'No popup' };
+      
+      const text = pop.innerText || '';
+      const html = pop.innerHTML || '';
+      
+      // Click any "Claim" or "Collect" buttons
+      let claimed = 0;
+      pop.querySelectorAll('button, [onclick]').forEach(b => {
+        const t = (b.textContent || '').toLowerCase();
+        const oc = (b.getAttribute('onclick') || '');
+        if (t.includes('claim') || t.includes('collect') || t.includes('reward') ||
+            oc.includes('claim') || oc.includes('collect')) {
+          b.click();
+          claimed++;
+        }
+      });
+      
+      return {
+        text: text.slice(0, 300),
+        claimed,
+        hasEvents: text.includes('event') || text.includes('Event'),
+      };
+    });
+    
+    if (result.error) {
+      log('⚠️','EVENTS', result.error);
+    } else if (result.claimed > 0) {
+      log('🎉','EVENTS',`Claimed ${result.claimed} event reward(s)!`);
+    } else {
+      log('ℹ️','EVENTS','No claimable rewards found');
+    }
+    
+    try { await page.evaluate(() => { if (typeof closePop==='function') closePop(); }); } catch(e) {}
+  } catch(e) {
+    log('⚠️','EVENTS',e.message);
+  }
+}
+
+// ── MYSTERY ENDPOINT ──────────────────────────────────────────
+// Captured from: Ajax('def227_j22.php','runme')
+// Unknown purpose — log response to figure out what it does
+async function mysteryEndpoint(page) {
+  log('🕵️','MYSTERY','Calling def227_j22.php...');
+  try {
+    const result = await page.evaluate(() => {
+      return new Promise(resolve => {
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+          if (this.readyState === 4) resolve({ status: this.status, text: this.responseText.slice(0, 300) });
+        };
+        xhr.open('GET', 'def227_j22.php', true);
+        xhr.send();
+      });
+    });
+    log('🕵️','MYSTERY',`Status: ${result.status} | Response: ${result.text.slice(0, 200)}`);
+  } catch(e) {
+    log('⚠️','MYSTERY',e.message);
+  }
+}
+
+module.exports = { collectBonus, doMaintenance, contributeAlliance, doResearch, claimAdReward, checkEvents, mysteryEndpoint };
