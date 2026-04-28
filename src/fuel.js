@@ -1,175 +1,250 @@
 // ============================================================
-//  FUEL & CO2 MODULE — Smart buying with better selectors
+//  FUEL & CO2 MODULE — v2.1 Smart Buying Strategy
+//  ✅ Uses direct fuel.php?mode=do XHR (no brittle UI clicks)
+//  ✅ BULK mode: fills tank when price is cheap (<$700)
+//  ✅ SURVIVAL mode: buys SMALL amount when tank <20% (any price)
+//  ✅ Integrates predictDip() for smart buying
 // ============================================================
 
 const tg = require('./telegram');
 const priceMemory = require('./priceMemory');
 
-const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 800;
+const FUEL_THRESHOLD = parseInt(process.env.FUEL_THRESHOLD) || 700;   // Bulk buy only when cheap
 const CO2_THRESHOLD = parseInt(process.env.CO2_THRESHOLD) || 110;
 const MIN_BANK_BALANCE = parseInt(process.env.MIN_BANK_BALANCE) || 500000;
+const CRITICAL_TANK_PCT = 0.20;   // Below 20% = survival buy kicks in
+const SURVIVAL_FILL_PCT = 0.30;   // In survival mode, buy just enough to reach 30%
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function log(icon, module, msg) {
   console.log(`${icon} [${new Date().toISOString().slice(11, 19)}] [${module}] ${msg}`);
 }
 
+/**
+ * Read fuel market data by opening the fuel popup and parsing it.
+ * Returns { fuelPrice, fuelCapacity, co2Price, co2Capacity, fuelStored, co2Stored }
+ */
+async function readFuelData(page) {
+  // Open fuel popup
+  await page.evaluate(() => {
+    if (typeof popup === 'function') popup('fuel.php', 'Fuel', false, false, true);
+  });
+  await sleep(3000);
+
+  const data = await page.evaluate(() => {
+    // Look in popup container
+    const container = document.getElementById('fuelMain')
+      || document.getElementById('popMain')
+      || document.querySelector('.popup-content, .modal-body, #popContent');
+
+    if (!container) {
+      return { error: 'No fuel container found', debug: document.body.innerText.slice(0, 300) };
+    }
+
+    const allText = container.innerText;
+
+    // ── Parse fuel price ──
+    let fuelPrice = 0;
+    const priceMatch = allText.match(/\$\s*(\d[\d,]*)/);
+    if (priceMatch) fuelPrice = parseInt(priceMatch[1].replace(/,/g, ''));
+    if (!fuelPrice) {
+      for (const b of container.querySelectorAll('b, strong, .price, [class*="price"]')) {
+        const m = b.innerText.match(/\$\s*(\d[\d,]*)/);
+        if (m) { fuelPrice = parseInt(m[1].replace(/,/g, '')); break; }
+      }
+    }
+
+    // ── Parse remaining capacity ──
+    let fuelCapacity = 0;
+    const capEl = document.getElementById('remCapacity');
+    if (capEl) {
+      fuelCapacity = parseInt(capEl.innerText.replace(/[^0-9]/g, '')) || 0;
+    } else {
+      const capMatch = allText.match(/(?:remaining|capacity)[:\s]*([\d,]+)/i);
+      if (capMatch) fuelCapacity = parseInt(capMatch[1].replace(/,/g, ''));
+    }
+
+    // ── Parse stored amount (for critical mode) ──
+    let fuelStored = 0;
+    const storedMatch = allText.match(/(?:stored|current)[:\s]*([\d,]+)\s*(?:lbs|kg)?/i);
+    if (storedMatch) fuelStored = parseInt(storedMatch[1].replace(/,/g, ''));
+
+    // ── Parse total capacity (for % calculation) ──
+    let totalCapacity = 0;
+    const totalMatch = allText.match(/(?:total|max)\s*(?:capacity)?[:\s]*([\d,]+)/i);
+    if (totalMatch) totalCapacity = parseInt(totalMatch[1].replace(/,/g, ''));
+
+    return {
+      fuelPrice,
+      fuelCapacity,  // remaining capacity (how much MORE we can buy)
+      fuelStored,
+      totalCapacity,
+      containerText: allText.slice(0, 400),
+    };
+  });
+
+  // Close popup
+  try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
+
+  return data;
+}
+
+/**
+ * Buy fuel using direct XHR to fuel.php?mode=do
+ * This bypasses all the fragile UI button-clicking.
+ */
+async function buyFuelDirect(page, amount) {
+  const result = await page.evaluate(async (qty) => {
+    return new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.onreadystatechange = function () {
+        if (this.readyState === 4) {
+          resolve({
+            status: this.status,
+            text: this.responseText.slice(0, 500),
+            ok: this.status === 200
+          });
+        }
+      };
+      // AM4's fuel buy endpoint
+      xhr.open('GET', `fuel.php?mode=do&amount=${qty}&fbSig=false`, true);
+      xhr.send();
+    });
+  }, amount);
+
+  return result;
+}
+
+/**
+ * Buy CO2 using direct XHR to fuel.php (CO2 tab)
+ */
+async function buyCO2Direct(page, amount) {
+  const result = await page.evaluate(async (qty) => {
+    return new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.onreadystatechange = function () {
+        if (this.readyState === 4) {
+          resolve({
+            status: this.status,
+            text: this.responseText.slice(0, 500),
+            ok: this.status === 200
+          });
+        }
+      };
+      // AM4's CO2 buy endpoint
+      xhr.open('GET', `co2.php?mode=do&amount=${qty}&fbSig=false`, true);
+      xhr.send();
+    });
+  }, amount);
+
+  return result;
+}
+
+
+// ════════════════════════════════════════════════════════════
+//  MAIN FUEL CHECK
+// ════════════════════════════════════════════════════════════
 async function checkFuel(page, bankBalance) {
   log('⛽', 'FUEL', 'Checking fuel...');
   try {
-    // Navigate to fuel page
-    await page.evaluate(() => {
-      if (typeof popup === 'function') popup('fuel.php', 'Fuel', false, false, true);
-    });
-    await sleep(3000);
-
-    // Read fuel data — try multiple selector strategies
-    const fd = await page.evaluate(() => {
-      // Strategy 1: Look in #fuelMain
-      let container = document.getElementById('fuelMain');
-      // Strategy 2: Look in popup
-      if (!container) container = document.getElementById('popMain');
-      // Strategy 3: Any visible popup content
-      if (!container) container = document.querySelector('.popup-content, .modal-body, #popContent');
-
-      if (!container) {
-        // Log what we CAN see for debugging
-        const bodyText = document.body.innerText.slice(0, 500);
-        return { error: 'No fuel container found', debug: bodyText };
-      }
-
-      // Find price — look for $ sign in bold or span elements
-      let price = '';
-      const allText = container.innerText;
-
-      // Try to find price pattern like "$XXX" or "$ XXX"
-      const priceMatch = allText.match(/\$\s*(\d[\d,]*)/);
-      if (priceMatch) price = priceMatch[0];
-
-      // Fallback: look in bold elements
-      if (!price) {
-        for (const b of container.querySelectorAll('b, strong, .price, [class*="price"]')) {
-          if (b.innerText.includes('$')) { price = b.innerText; break; }
-        }
-      }
-
-      // Find capacity
-      let capacity = '';
-      const capEl = document.getElementById('remCapacity');
-      if (capEl) {
-        capacity = capEl.innerText;
-      } else {
-        // Look for capacity text
-        const capMatch = allText.match(/capacity[:\s]*(\d[\d,]*)/i);
-        if (capMatch) capacity = capMatch[1];
-      }
-
-      // Find the amount input
-      const amountInput = document.getElementById('amountInput')
-        || container.querySelector('input[type="number"]')
-        || container.querySelector('input[type="text"]');
-
-      return {
-        price,
-        capacity,
-        hasInput: !!amountInput,
-        containerText: allText.slice(0, 300)
-      };
-    });
+    const fd = await readFuelData(page);
 
     if (fd?.error) {
       log('⚠️', 'FUEL', fd.error);
       log('🔍', 'FUEL', `Debug: ${fd.debug?.slice(0, 200)}`);
-      try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
       return null;
     }
 
-    if (!fd?.price) {
-      log('⚠️', 'FUEL', `Could not read fuel price. Page text: ${fd?.containerText?.slice(0, 150)}`);
-      try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
+    const price = fd.fuelPrice;
+    const cap = fd.fuelCapacity;
+    const stored = fd.fuelStored;
+    const totalCap = fd.totalCapacity || (stored + cap);
+
+    if (!price) {
+      log('⚠️', 'FUEL', `Could not read fuel price. Page text: ${fd.containerText?.slice(0, 150)}`);
       return null;
     }
 
-    const price = parseInt(fd.price.replace(/[^0-9]/g, ''));
-    const cap = parseInt((fd.capacity || '0').replace(/[^0-9]/g, '')) || 0;
-    log('⛽', 'FUEL', `Price: $${price} | Capacity: ${cap.toLocaleString()} lbs | Has input: ${fd.hasInput}`);
+    log('⛽', 'FUEL', `Price: $${price} | Remaining cap: ${cap.toLocaleString()} | Stored: ${stored.toLocaleString()} | Total cap: ${totalCap.toLocaleString()}`);
 
     // Record to persistent price memory
     priceMemory.recordPrice('fuel', price);
 
-    if (price <= FUEL_THRESHOLD && cap > 0) {
-      // Calculate how much we can buy
-      let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+    // ── Decide whether to buy ──
+    const tankPct = totalCap > 0 ? stored / totalCap : 1;
+    const isCritical = tankPct < CRITICAL_TANK_PCT;
+    const isDip = priceMemory.predictDip('fuel', price);
+    const isBelowThreshold = price <= FUEL_THRESHOLD;
 
-      // EMERGENCY: If bank is low but we NEED fuel to fly, use half of what's left
-      if (affordReserve === 0 && bankBalance > 10000) {
-        affordReserve = Math.floor(bankBalance / 2);
-        log('🚨', 'FUEL', 'Emergency: Using half of remaining cash for fuel!');
+    // Determine buy mode:
+    //   BULK   = price is cheap (or dip) → fill as much as possible
+    //   SURVIVAL = price is expensive BUT tank is dangerously low → buy JUST enough to keep flying
+    //   SKIP   = price is expensive and tank is fine → wait for cheaper prices
+    let buyMode = 'SKIP';
+    if ((isBelowThreshold || isDip) && cap > 0) {
+      buyMode = 'BULK';
+    } else if (isCritical && cap > 0) {
+      buyMode = 'SURVIVAL';
+    }
+
+    log('📊', 'FUEL', `Tank: ${Math.round(tankPct * 100)}% | Mode: ${buyMode} | Price: $${price} | Threshold: $${FUEL_THRESHOLD} | Dip: ${isDip}`);
+
+    if (buyMode !== 'SKIP') {
+      let toBuy = 0;
+
+      if (buyMode === 'BULK') {
+        // BULK: price is good — buy as much as we can afford (keep MIN_BANK_BALANCE reserve)
+        let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+        if (affordReserve === 0 && bankBalance > 10000) {
+          affordReserve = Math.floor(bankBalance / 2);
+        }
+        const canAfford = Math.floor(affordReserve / price * 1000);
+        toBuy = Math.min(canAfford, cap);
+        log('🛢', 'FUEL', `BULK BUY: Price is good! Buying up to ${toBuy.toLocaleString()} lbs`);
+
+      } else if (buyMode === 'SURVIVAL') {
+        // SURVIVAL: price is high but we NEED fuel to keep planes flying
+        // Only buy enough to get from current level to 30% — just enough to survive
+        const targetFuel = Math.floor(totalCap * SURVIVAL_FILL_PCT);
+        const needed = Math.max(0, targetFuel - stored);
+        const survivalCost = Math.round(needed * price / 1000);
+        // Cap spending at 15% of bank — don't blow the bank on expensive fuel
+        const maxSpend = Math.floor(bankBalance * 0.15);
+        const canAfford = Math.floor(maxSpend / price * 1000);
+        toBuy = Math.min(needed, canAfford, cap);
+        log('🚨', 'FUEL', `SURVIVAL BUY: Tank at ${Math.round(tankPct * 100)}%! Need ${needed.toLocaleString()} lbs to reach 30%. Spending max $${maxSpend.toLocaleString()} (15% of bank)`);
       }
 
-      const canAfford = Math.floor(affordReserve / price * 1000);
-      const toBuy = Math.min(canAfford, cap);
-
       if (toBuy > 10) {
-        log('🛢', 'FUEL', `BUYING ${toBuy.toLocaleString()} lbs at $${price}!`);
+        log('🛢', 'FUEL', `BUYING ${toBuy.toLocaleString()} lbs at $${price} [${buyMode}]`);
 
-        // Set amount — try multiple input strategies
-        await page.evaluate(amount => {
-          const inputs = [
-            document.getElementById('amountInput'),
-            document.querySelector('#fuelMain input[type="number"]'),
-            document.querySelector('#fuelMain input[type="text"]'),
-            document.querySelector('#popMain input[type="number"]'),
-            document.querySelector('#popMain input[type="text"]'),
-            document.querySelector('input[name="amount"]'),
-          ];
-          for (const i of inputs) {
-            if (i) {
-              i.value = amount;
-              i.dispatchEvent(new Event('input', { bubbles: true }));
-              i.dispatchEvent(new Event('change', { bubbles: true }));
-              break;
-            }
+        // ── Try direct XHR first (reliable) ──
+        const xhrResult = await buyFuelDirect(page, toBuy);
+
+        if (xhrResult.ok) {
+          const cost = Math.round(toBuy * price / 1000);
+          log('✅', 'FUEL', `XHR Buy success! ${toBuy.toLocaleString()} lbs for ~$${cost.toLocaleString()}`);
+
+          // Check if response contains error messages
+          if (xhrResult.text.includes('error') || xhrResult.text.includes('fail') || xhrResult.text.includes('insufficient')) {
+            log('⚠️', 'FUEL', `Server said: ${xhrResult.text.slice(0, 200)}`);
+            log('🔄', 'FUEL', 'Falling back to UI buy method...');
+            await buyFuelViaUI(page, toBuy);
+          } else {
+            await tg.fuelBought(toBuy, price, cost);
           }
-        }, toBuy);
-        await sleep(800);
-
-        // Click buy button
-        await page.evaluate(() => {
-          const containers = [
-            document.getElementById('fuelMain'),
-            document.getElementById('popMain'),
-            document.querySelector('.popup-content'),
-          ].filter(Boolean);
-
-          for (const el of containers) {
-            const btns = el.querySelectorAll('button, [onclick]');
-            for (const b of btns) {
-              const text = (b.textContent || '').toLowerCase();
-              if (text.includes('buy') || b.classList.contains('btn-success') || b.classList.contains('btn-primary')) {
-                b.click();
-                return;
-              }
-            }
-            // Last resort: click last button
-            if (btns.length) { btns[btns.length - 1].click(); return; }
-          }
-        });
-        await sleep(2000);
-
-        const cost = Math.round(toBuy * price / 1000);
-        log('✅', 'FUEL', `Bought ${toBuy.toLocaleString()} lbs for $${cost.toLocaleString()}`);
-        await tg.fuelBought(toBuy, price, cost);
+        } else {
+          log('⚠️', 'FUEL', `XHR returned ${xhrResult.status}: ${xhrResult.text.slice(0, 200)}`);
+          log('🔄', 'FUEL', 'Falling back to UI buy method...');
+          await buyFuelViaUI(page, toBuy);
+        }
       } else {
         log('⚠️', 'FUEL', `Can only afford ${toBuy} lbs — too little to buy`);
       }
-    } else if (price > FUEL_THRESHOLD) {
-      log('ℹ️', 'FUEL', `$${price} > threshold $${FUEL_THRESHOLD} — skipping`);
     } else {
-      log('ℹ️', 'FUEL', 'No capacity to buy fuel');
+      log('ℹ️', 'FUEL', `$${price} > threshold $${FUEL_THRESHOLD} and tank at ${Math.round(tankPct * 100)}% (OK) — waiting for cheaper prices`);
     }
 
-    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
     return price;
   } catch (e) {
     log('❌', 'FUEL', e.message);
@@ -179,6 +254,72 @@ async function checkFuel(page, bankBalance) {
   }
 }
 
+/**
+ * Fallback: buy fuel through UI interaction (old method)
+ */
+async function buyFuelViaUI(page, toBuy) {
+  try {
+    // Re-open fuel popup
+    await page.evaluate(() => {
+      if (typeof popup === 'function') popup('fuel.php', 'Fuel', false, false, true);
+    });
+    await sleep(3000);
+
+    // Set amount
+    await page.evaluate(amount => {
+      const inputs = [
+        document.getElementById('amountInput'),
+        document.querySelector('#fuelMain input[type="number"]'),
+        document.querySelector('#fuelMain input[type="text"]'),
+        document.querySelector('#popMain input[type="number"]'),
+        document.querySelector('#popMain input[type="text"]'),
+        document.querySelector('input[name="amount"]'),
+      ];
+      for (const i of inputs) {
+        if (i) {
+          i.value = amount;
+          i.dispatchEvent(new Event('input', { bubbles: true }));
+          i.dispatchEvent(new Event('change', { bubbles: true }));
+          break;
+        }
+      }
+    }, toBuy);
+    await sleep(800);
+
+    // Click buy button
+    await page.evaluate(() => {
+      const containers = [
+        document.getElementById('fuelMain'),
+        document.getElementById('popMain'),
+        document.querySelector('.popup-content'),
+      ].filter(Boolean);
+
+      for (const el of containers) {
+        const btns = el.querySelectorAll('button, [onclick]');
+        for (const b of btns) {
+          const text = (b.textContent || '').toLowerCase();
+          if (text.includes('buy') || b.classList.contains('btn-success') || b.classList.contains('btn-primary')) {
+            b.click();
+            return;
+          }
+        }
+        if (btns.length) { btns[btns.length - 1].click(); return; }
+      }
+    });
+    await sleep(2000);
+
+    log('✅', 'FUEL', `UI fallback buy attempted for ${toBuy.toLocaleString()} lbs`);
+    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
+  } catch (e) {
+    log('❌', 'FUEL', `UI fallback failed: ${e.message}`);
+    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e2) { }
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════
+//  CO2 CHECK
+// ════════════════════════════════════════════════════════════
 async function checkCO2(page, bankBalance) {
   log('🌿', 'CO2', 'Checking CO2...');
   try {
@@ -186,6 +327,7 @@ async function checkCO2(page, bankBalance) {
       if (typeof popup === 'function') popup('fuel.php', 'Fuel', false, false, true);
     });
     await sleep(2500);
+
     // Click CO2 tab
     await page.evaluate(() => {
       const btn = document.getElementById('popBtn2');
@@ -206,32 +348,41 @@ async function checkCO2(page, bankBalance) {
       if (!container) return null;
 
       const allText = container.innerText;
-      let price = '';
+      let price = 0;
       const priceMatch = allText.match(/\$\s*(\d[\d,]*)/);
-      if (priceMatch) price = priceMatch[0];
+      if (priceMatch) price = parseInt(priceMatch[1].replace(/,/g, ''));
       if (!price) {
         for (const b of container.querySelectorAll('b, strong')) {
-          if (b.innerText.includes('$')) { price = b.innerText; break; }
+          const m = b.innerText.match(/\$\s*(\d[\d,]*)/);
+          if (m) { price = parseInt(m[1].replace(/,/g, '')); break; }
         }
       }
 
-      let capacity = '';
+      let capacity = 0;
       const capEl = document.getElementById('remCapacity');
-      if (capEl) capacity = capEl.innerText;
+      if (capEl) capacity = parseInt(capEl.innerText.replace(/[^0-9]/g, '')) || 0;
 
-      return { price, capacity };
+      return { price, capacity, containerText: allText.slice(0, 300) };
     });
+
+    // Close fuel popup
+    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
 
     if (!cd?.price) { log('⚠️', 'CO2', 'Could not read CO2 data'); return null; }
 
-    const price = parseInt(cd.price.replace(/[^0-9]/g, ''));
-    const cap = parseInt((cd.capacity || '0').replace(/[^0-9]/g, '')) || 0;
+    const price = cd.price;
+    const cap = cd.capacity;
     log('🌿', 'CO2', `Price: $${price} | Capacity: ${cap.toLocaleString()}`);
 
     // Record to persistent price memory
     priceMemory.recordPrice('co2', price);
 
-    if (price <= CO2_THRESHOLD && cap > 0) {
+    const isDip = priceMemory.predictDip('co2', price);
+    const isBelowThreshold = price <= CO2_THRESHOLD;
+
+    log('📊', 'CO2', `Below threshold ($${CO2_THRESHOLD}): ${isBelowThreshold} | Dip: ${isDip}`);
+
+    if ((isBelowThreshold || isDip) && cap > 0) {
       let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
       if (affordReserve === 0 && bankBalance > 10000) {
         affordReserve = Math.floor(bankBalance / 4);
@@ -242,55 +393,90 @@ async function checkCO2(page, bankBalance) {
       const toBuy = Math.min(canAfford, cap);
 
       if (toBuy > 10) {
-        log('🌍', 'CO2', `BUYING ${toBuy.toLocaleString()} CO2 at $${price}!`);
-        await page.evaluate(amount => {
-          const inputs = [
-            document.getElementById('amountInput'),
-            document.querySelector('input[type="number"]'),
-            document.querySelector('input[name="amount"]'),
-          ];
-          for (const i of inputs) {
-            if (i) {
-              i.value = amount;
-              i.dispatchEvent(new Event('input', { bubbles: true }));
-              i.dispatchEvent(new Event('change', { bubbles: true }));
-              break;
-            }
-          }
-        }, toBuy);
-        await sleep(800);
+        log('🌍', 'CO2', `BUYING ${toBuy.toLocaleString()} CO2 at $${price}! (${isDip ? 'DIP BUY' : 'NORMAL'})`);
 
-        await page.evaluate(() => {
-          const containers = [
-            document.getElementById('co2Main'),
-            document.getElementById('popMain'),
-            document.querySelector('.popup-content'),
-          ].filter(Boolean);
-          for (const el of containers) {
-            const btns = el.querySelectorAll('button');
-            for (const b of btns) {
-              const text = (b.textContent || '').toLowerCase();
-              if (text.includes('buy') || b.classList.contains('btn-success')) { b.click(); return; }
-            }
-            if (btns.length) { btns[btns.length - 1].click(); return; }
-          }
-        });
-        await sleep(2000);
+        // Try direct XHR first
+        const xhrResult = await buyCO2Direct(page, toBuy);
 
-        const cost = Math.round(toBuy * price / 1000);
-        log('✅', 'CO2', `Bought ${toBuy.toLocaleString()} CO2 for $${cost.toLocaleString()}`);
-        await tg.co2Bought(toBuy, price, cost);
+        if (xhrResult.ok && !xhrResult.text.includes('error') && !xhrResult.text.includes('insufficient')) {
+          const cost = Math.round(toBuy * price / 1000);
+          log('✅', 'CO2', `XHR Buy success! ${toBuy.toLocaleString()} CO2 for ~$${cost.toLocaleString()}`);
+          await tg.co2Bought(toBuy, price, cost);
+        } else {
+          log('⚠️', 'CO2', `XHR result: ${xhrResult.status} — ${xhrResult.text.slice(0, 200)}`);
+          // Fallback to UI
+          log('🔄', 'CO2', 'Falling back to UI method...');
+          await buyco2ViaUI(page, toBuy);
+        }
       }
     } else {
       log('ℹ️', 'CO2', `$${price} > threshold $${CO2_THRESHOLD} — skipping`);
     }
 
-    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
     return price;
   } catch (e) {
     log('❌', 'CO2', e.message);
     try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e2) { }
     return null;
+  }
+}
+
+/**
+ * Fallback: buy CO2 through UI interaction
+ */
+async function buyco2ViaUI(page, toBuy) {
+  try {
+    await page.evaluate(() => {
+      if (typeof popup === 'function') popup('fuel.php', 'Fuel', false, false, true);
+    });
+    await sleep(2500);
+
+    // Click CO2 tab
+    await page.evaluate(() => {
+      const btn = document.getElementById('popBtn2');
+      if (btn) btn.click();
+    });
+    await sleep(2000);
+
+    await page.evaluate(amount => {
+      const inputs = [
+        document.getElementById('amountInput'),
+        document.querySelector('input[type="number"]'),
+        document.querySelector('input[name="amount"]'),
+      ];
+      for (const i of inputs) {
+        if (i) {
+          i.value = amount;
+          i.dispatchEvent(new Event('input', { bubbles: true }));
+          i.dispatchEvent(new Event('change', { bubbles: true }));
+          break;
+        }
+      }
+    }, toBuy);
+    await sleep(800);
+
+    await page.evaluate(() => {
+      const containers = [
+        document.getElementById('co2Main'),
+        document.getElementById('popMain'),
+        document.querySelector('.popup-content'),
+      ].filter(Boolean);
+      for (const el of containers) {
+        const btns = el.querySelectorAll('button');
+        for (const b of btns) {
+          const text = (b.textContent || '').toLowerCase();
+          if (text.includes('buy') || b.classList.contains('btn-success')) { b.click(); return; }
+        }
+        if (btns.length) { btns[btns.length - 1].click(); return; }
+      }
+    });
+    await sleep(2000);
+
+    log('✅', 'CO2', `UI fallback buy attempted for ${toBuy.toLocaleString()} CO2`);
+    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e) { }
+  } catch (e) {
+    log('❌', 'CO2', `UI fallback failed: ${e.message}`);
+    try { await page.evaluate(() => { if (typeof closePop === 'function') closePop(); }); } catch (e2) { }
   }
 }
 

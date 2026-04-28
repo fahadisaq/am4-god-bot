@@ -136,6 +136,18 @@ async function main() {
     });
     reporter.recordSessionStart(startBalance);
 
+    // ── Startup fuel check (critical — planes can't fly without fuel!) ──
+    log('⛽','BOT','Checking fuel on startup...');
+    try {
+      lastFuelPrice = await checkFuel(page, startBalance) || 0;
+      await sleep(2000);
+      lastCO2Price = await checkCO2(page, startBalance) || 0;
+      lastFuelCheck = Date.now();
+    } catch(e) {
+      log('⚠️','FUEL','Startup fuel check failed: ' + e.message);
+      lastFuelCheck = 0; // Force check on first cycle
+    }
+
     // ── Scrape routes once at start ──
     try {
       await scrapeRoutes(page);

@@ -49,7 +49,7 @@ jobs:
         env:
           AM4_EMAIL: ${{ secrets.AM4_EMAIL }}
           AM4_PASSWORD: ${{ secrets.AM4_PASSWORD }}
-          FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '800' }}
+          FUEL_THRESHOLD: ${{ secrets.FUEL_THRESHOLD || '700' }}
           CO2_THRESHOLD: ${{ secrets.CO2_THRESHOLD || '110' }}
           MIN_BANK_BALANCE: ${{ secrets.MIN_BANK_BALANCE || '500000' }}
           AUTO_BUY_THRESHOLD: ${{ secrets.AUTO_BUY_THRESHOLD || '0' }}
