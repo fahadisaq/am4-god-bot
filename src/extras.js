@@ -188,35 +188,51 @@ async function doMaintenance(page) {
             });
             
             log('🔍','MAINT',`  Tab click: ${tabResult.tabClicked} | Buttons found: [${tabResult.allButtons.join(', ')}]`);
-            await sleep(2000);
+            await sleep(4000); // Wait for Ajax content to load after clicking Repair tab
             
-            // Now click "Plan repair" or "Bulk repair" in the loaded Repair content
+            // Now scan the repair content area for Plan/Bulk repair buttons
             const repairClick = await page.evaluate(() => {
-              const pop = document.getElementById('popContent') || document.getElementById('maintAction') || document.body;
+              // Check multiple possible containers where repair content loads
+              const containers = [
+                document.getElementById('maintDetail'),
+                document.getElementById('maintAction'), 
+                document.getElementById('popContent'),
+              ].filter(Boolean);
+              
               let clicked = 0;
               let buttonTexts = [];
+              let onclickTexts = [];
+              let htmlSnippet = '';
               
-              pop.querySelectorAll('button, [onclick]').forEach(b => {
-                const t = (b.textContent || '').trim().toLowerCase();
-                buttonTexts.push(t.slice(0, 40));
-                if (t.includes('plan repair') || t.includes('bulk repair') || t.includes('repair all')) {
-                  b.click();
-                  clicked++;
-                }
-              });
+              for (const container of containers) {
+                if (htmlSnippet.length === 0) htmlSnippet = container.innerHTML.slice(0, 500);
+                
+                container.querySelectorAll('button, [onclick], a, .btn').forEach(b => {
+                  const t = (b.textContent || '').trim().toLowerCase();
+                  const oc = (b.getAttribute('onclick') || '').toLowerCase();
+                  
+                  if (t.length > 0 && t.length < 50) buttonTexts.push(t);
+                  if (oc.includes('repair')) onclickTexts.push(oc.slice(0, 100));
+                  
+                  // Click repair-related buttons
+                  if (t.includes('plan repair') || t.includes('bulk repair') || 
+                      t.includes('repair all') || t.includes('schedule repair') ||
+                      (oc.includes('repair') && oc.includes('mode=do'))) {
+                    b.click();
+                    clicked++;
+                  }
+                });
+              }
               
-              // Also grab the current HTML to see what repair options exist
-              const repairHtml = pop.innerHTML || '';
-              const hasRepairContent = repairHtml.includes('repair') || repairHtml.includes('Repair');
-              
-              return { clicked, buttonTexts, hasRepairContent, htmlSnippet: repairHtml.slice(0, 300) };
+              return { clicked, buttonTexts, onclickTexts, htmlSnippet };
             });
             
             if (repairClick.clicked > 0) {
               log('✅','MAINT',`  Repair triggered! Clicked ${repairClick.clicked} button(s) for ID ${maintId}`);
             } else {
               log('🔍','MAINT',`  No repair buttons clicked. Buttons: [${repairClick.buttonTexts.join(', ')}]`);
-              log('🔍','MAINT',`  Repair content: ${repairClick.htmlSnippet.slice(0, 150)}`);
+              if (repairClick.onclickTexts.length > 0) log('🔍','MAINT',`  Repair onclicks: [${repairClick.onclickTexts.join(' | ')}]`);
+              log('🔍','MAINT',`  Repair HTML: ${repairClick.htmlSnippet.slice(0, 300)}`);
             }
           }
           
