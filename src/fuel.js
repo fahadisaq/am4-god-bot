@@ -217,14 +217,17 @@ async function checkFuel(page, bankBalance) {
       let toBuy = 0;
 
       if (buyMode === 'BULK') {
-        // BULK: price is good — buy as much as we can afford (keep MIN_BANK_BALANCE reserve)
-        let affordReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE);
+        // BULK: price is good — buy fuel but DON'T drain the bank!
+        // Cap at 30% of bank OR (bank - $500K), whichever is LESS
+        const maxByPercent = Math.floor(bankBalance * 0.30);   // Never spend more than 30%
+        const maxByReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE); // Keep $500K reserve
+        let affordReserve = Math.min(maxByPercent, maxByReserve);
         if (affordReserve === 0 && bankBalance > 10000) {
-          affordReserve = Math.floor(bankBalance / 2);
+          affordReserve = Math.floor(bankBalance * 0.10); // Fallback: 10% if broke
         }
         const canAfford = Math.floor(affordReserve / price * 1000);
         toBuy = Math.min(canAfford, cap);
-        log('🛢', 'FUEL', `BULK BUY: Price is good! Buying up to ${toBuy.toLocaleString()} lbs`);
+        log('🛢', 'FUEL', `BULK BUY: Price $${price} is good! Spending max $${affordReserve.toLocaleString()} (30% of bank) for ${toBuy.toLocaleString()} lbs`);
 
       } else if (buyMode === 'SURVIVAL') {
         // SURVIVAL: price is high but we NEED fuel to keep planes flying
