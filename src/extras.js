@@ -116,6 +116,7 @@ async function doMaintenance(page) {
         log('🔧','MAINT',`Checking repair pages for ${stats.maintIds.length} aircraft...`);
         
         for (const maintId of stats.maintIds) {
+          // Step 1: Load the repair details page (CORRECT URL: maintenance_details.php)
           const detail = await page.evaluate((id) => {
             return new Promise(resolve => {
               const xhr = new XMLHttpRequest();
@@ -128,21 +129,59 @@ async function doMaintenance(page) {
                   let m;
                   while ((m = ajaxP.exec(text)) !== null) ajaxUrls.push(m[1]);
                   
+                  // Find onclick handlers with repair actions
+                  const onclicks = [];
+                  const ocP = /onclick="([^"]*(?:repair|check|plan)[^"]*)"/gi;
+                  while ((m = ocP.exec(text)) !== null) onclicks.push(m[1].slice(0, 200));
+                  
                   resolve({
                     status: this.status,
-                    snippet: text.slice(0, 300),
+                    snippet: text.slice(0, 500),
                     ajaxUrls,
+                    onclicks,
                     hasRepair: text.includes('Bulk repair') || text.includes('Plan repair'),
+                    hasBulk: text.includes('Bulk repair'),
                   });
                 }
               };
-              xhr.open('GET', `maint_detail.php?id=${id}`, true);
+              xhr.open('GET', `maintenance_details.php?id=${id}`, true);
               xhr.send();
             });
           }, maintId);
           
-          log('🔧','MAINT',`  ID ${maintId}: ${detail.status} | repair=${detail.hasRepair} | ajax=[${detail.ajaxUrls.join(',')}]`);
-          log('🔍','MAINT',`  ${detail.snippet.slice(0, 150)}`);
+          log('🔧','MAINT',`  ID ${maintId}: ${detail.status} | repair=${detail.hasRepair} | bulk=${detail.hasBulk}`);
+          if (detail.ajaxUrls.length > 0) log('🔍','MAINT',`  Ajax URLs: ${detail.ajaxUrls.join(' | ')}`);
+          if (detail.onclicks.length > 0) log('🔍','MAINT',`  Onclicks: ${detail.onclicks.join(' | ')}`);
+          log('🔍','MAINT',`  Response: ${detail.snippet.slice(0, 200)}`);
+          
+          // Step 2: If repair page loaded, try to call maintDetails() in the browser
+          // This loads the repair UI into the popup, then we can click buttons
+          if (detail.status === 200 && detail.hasRepair) {
+            log('🔧','MAINT',`  Attempting repair for ID ${maintId}...`);
+            await page.evaluate((id) => {
+              if (typeof maintDetails === 'function') maintDetails(id);
+            }, parseInt(maintId));
+            await sleep(2000);
+            
+            // Click any "Plan repair" or "Bulk repair" buttons that appeared
+            const repairClick = await page.evaluate(() => {
+              const pop = document.getElementById('popContent') || document.getElementById('maintAction');
+              if (!pop) return { clicked: 0 };
+              let clicked = 0;
+              pop.querySelectorAll('button, [onclick]').forEach(b => {
+                const t = (b.textContent || '').toLowerCase();
+                if (t.includes('plan repair') || t.includes('bulk repair')) {
+                  b.click();
+                  clicked++;
+                }
+              });
+              return { clicked };
+            });
+            if (repairClick.clicked > 0) {
+              log('✅','MAINT',`  Repair triggered! Clicked ${repairClick.clicked} button(s) for ID ${maintId}`);
+            }
+          }
+          
           await sleep(500);
         }
       }
