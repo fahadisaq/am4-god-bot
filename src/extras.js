@@ -154,31 +154,69 @@ async function doMaintenance(page) {
           if (detail.onclicks.length > 0) log('🔍','MAINT',`  Onclicks: ${detail.onclicks.join(' | ')}`);
           log('🔍','MAINT',`  Response: ${detail.snippet.slice(0, 200)}`);
           
-          // Step 2: If repair page loaded, try to call maintDetails() in the browser
-          // This loads the repair UI into the popup, then we can click buttons
-          if (detail.status === 200 && detail.hasRepair) {
-            log('🔧','MAINT',`  Attempting repair for ID ${maintId}...`);
+          // Step 2: Always attempt repair via UI when details page loads
+          // The details page shows A-Check tab by default — we need to:
+          //   1. Open maintDetails popup
+          //   2. Click "Repair" tab
+          //   3. Click "Plan repair" or "Bulk repair" button
+          if (detail.status === 200) {
+            log('🔧','MAINT',`  Opening repair popup for ID ${maintId}...`);
+            
+            // Open the maintenance details popup in the browser
             await page.evaluate((id) => {
               if (typeof maintDetails === 'function') maintDetails(id);
             }, parseInt(maintId));
+            await sleep(3000);
+            
+            // Click the "Repair" tab to switch from A-Check to Repair view
+            const tabResult = await page.evaluate(() => {
+              const pop = document.getElementById('popContent') || document.getElementById('maintAction') || document.body;
+              let tabClicked = false;
+              let allButtons = [];
+              
+              // Find and click the "Repair" tab button
+              pop.querySelectorAll('button, [onclick], .popMenuBtn').forEach(b => {
+                const t = (b.textContent || '').trim().toLowerCase();
+                allButtons.push(t.slice(0, 30));
+                if (t === 'repair' || t === 'repairs') {
+                  b.click();
+                  tabClicked = true;
+                }
+              });
+              
+              return { tabClicked, allButtons };
+            });
+            
+            log('🔍','MAINT',`  Tab click: ${tabResult.tabClicked} | Buttons found: [${tabResult.allButtons.join(', ')}]`);
             await sleep(2000);
             
-            // Click any "Plan repair" or "Bulk repair" buttons that appeared
+            // Now click "Plan repair" or "Bulk repair" in the loaded Repair content
             const repairClick = await page.evaluate(() => {
-              const pop = document.getElementById('popContent') || document.getElementById('maintAction');
-              if (!pop) return { clicked: 0 };
+              const pop = document.getElementById('popContent') || document.getElementById('maintAction') || document.body;
               let clicked = 0;
+              let buttonTexts = [];
+              
               pop.querySelectorAll('button, [onclick]').forEach(b => {
-                const t = (b.textContent || '').toLowerCase();
-                if (t.includes('plan repair') || t.includes('bulk repair')) {
+                const t = (b.textContent || '').trim().toLowerCase();
+                buttonTexts.push(t.slice(0, 40));
+                if (t.includes('plan repair') || t.includes('bulk repair') || t.includes('repair all')) {
                   b.click();
                   clicked++;
                 }
               });
-              return { clicked };
+              
+              // Also grab the current HTML to see what repair options exist
+              const repairHtml = pop.innerHTML || '';
+              const hasRepairContent = repairHtml.includes('repair') || repairHtml.includes('Repair');
+              
+              return { clicked, buttonTexts, hasRepairContent, htmlSnippet: repairHtml.slice(0, 300) };
             });
+            
             if (repairClick.clicked > 0) {
               log('✅','MAINT',`  Repair triggered! Clicked ${repairClick.clicked} button(s) for ID ${maintId}`);
+            } else {
+              log('🔍','MAINT',`  No repair buttons clicked. Buttons: [${repairClick.buttonTexts.join(', ')}]`);
+              log('🔍','MAINT',`  Repair content: ${repairClick.htmlSnippet.slice(0, 150)}`);
             }
           }
           
