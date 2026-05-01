@@ -173,115 +173,78 @@ async function checkFuel(page, bankBalance) {
     // Record to persistent price memory
     priceMemory.recordPrice('fuel', price);
 
-    // ── Decide whether to buy ──
-    const tankPct = totalCap > 0 ? stored / totalCap : 1;
-    const isCritical = tankPct < CRITICAL_TANK_PCT;
-    const isDip = priceMemory.predictDip('fuel', price);
-    const isBelowThreshold = price <= FUEL_THRESHOLD;
+    // ── Simple fuel buying rules ──
+    // Rule 1: Price ≤ $400 → BULK BUY (30% of bank)
+    // Rule 2: Tank empty + waited 2hrs with no cheap price → tiny EMERGENCY buy (2hrs worth)
+    // Rule 3: Everything else → SKIP and wait
 
-    // Determine buy mode:
-    //   BULK   = price is cheap (or dip) → fill as much as possible
-    //   SURVIVAL = price is expensive BUT tank is dangerously low → buy JUST enough to keep flying
-    //   SKIP   = price is expensive and tank is fine → wait for cheaper prices
-    //   EMERGENCY = bank is broke AND tank is 0% → buy TINY amount just to keep some planes flying
+    const CHEAP_PRICE = 400;           // Only bulk buy below $400
+    const EMERGENCY_WAIT = 2 * 60 * 60 * 1000; // Wait 2 hours before emergency buy
+    const timeSinceEmergency = Date.now() - lastSurvivalBuy;
+
     let buyMode = 'SKIP';
-    if ((isBelowThreshold || isDip) && cap > 0) {
+    let toBuy = 0;
+
+    if (price <= CHEAP_PRICE && cap > 0) {
+      // Rule 1: Cheap fuel — buy in bulk (max 30% of bank)
       buyMode = 'BULK';
-    } else if (isCritical && cap > 0) {
-      // SURVIVAL checks:
-      // 1. Bank must be above $1M floor for normal survival
-      // 2. Must wait 1 hour between survival buys (prevent drain)
-      const timeSinceLastSurvival = Date.now() - lastSurvivalBuy;
-      if (bankBalance < SURVIVAL_BANK_FLOOR) {
-        // Bank is below $1M — but if tank is literally 0%, we MUST buy a tiny amount
-        // or the airline dies completely (no flights = no revenue = game over)
-        if (stored === 0 && bankBalance > 50000) {
-          buyMode = 'EMERGENCY';
-          log('🆘', 'FUEL', `EMERGENCY: Bank low ($${bankBalance.toLocaleString()}) but tank is EMPTY! Buying tiny amount to keep airline alive`);
-        } else {
-          log('🛑', 'FUEL', `Bank $${bankBalance.toLocaleString()} is below $1M floor — REFUSING to buy expensive fuel!`);
-          buyMode = 'SKIP';
-        }
-      } else if (timeSinceLastSurvival < SURVIVAL_COOLDOWN) {
-        const minsLeft = Math.round((SURVIVAL_COOLDOWN - timeSinceLastSurvival) / 60000);
-        log('⏳', 'FUEL', `Survival cooldown: ${minsLeft}m left — skipping to prevent bank drain`);
-        buyMode = 'SKIP';
-      } else {
-        buyMode = 'SURVIVAL';
-      }
-    }
+      const maxSpend = Math.min(
+        Math.floor(bankBalance * 0.30),          // 30% of bank max
+        Math.max(0, bankBalance - MIN_BANK_BALANCE) // keep $500K reserve
+      );
+      toBuy = Math.min(Math.floor(maxSpend / price * 1000), cap);
+      log('💰', 'FUEL', `CHEAP PRICE $${price} ≤ $${CHEAP_PRICE}! Buying ${toBuy.toLocaleString()} lbs (spending $${Math.round(toBuy*price/1000).toLocaleString()})`);
 
-    log('📊', 'FUEL', `Tank: ${Math.round(tankPct * 100)}% | Mode: ${buyMode} | Price: $${price} | Bank: $${bankBalance.toLocaleString()} | Threshold: $${FUEL_THRESHOLD}`);
-
-    if (buyMode !== 'SKIP') {
-      let toBuy = 0;
-
-      if (buyMode === 'BULK') {
-        // BULK: price is good — buy fuel but DON'T drain the bank!
-        // Cap at 30% of bank OR (bank - $500K), whichever is LESS
-        const maxByPercent = Math.floor(bankBalance * 0.30);   // Never spend more than 30%
-        const maxByReserve = Math.max(0, bankBalance - MIN_BANK_BALANCE); // Keep $500K reserve
-        let affordReserve = Math.min(maxByPercent, maxByReserve);
-        if (affordReserve === 0 && bankBalance > 10000) {
-          affordReserve = Math.floor(bankBalance * 0.10); // Fallback: 10% if broke
-        }
-        const canAfford = Math.floor(affordReserve / price * 1000);
-        toBuy = Math.min(canAfford, cap);
-        log('🛢', 'FUEL', `BULK BUY: Price $${price} is good! Spending max $${affordReserve.toLocaleString()} (30% of bank) for ${toBuy.toLocaleString()} lbs`);
-
-      } else if (buyMode === 'SURVIVAL') {
-        // SURVIVAL: price is high but we NEED fuel to keep planes flying
-        // Only buy enough to get from current level to 25%
-        const targetFuel = Math.floor(totalCap * SURVIVAL_FILL_PCT);
-        const needed = Math.max(0, targetFuel - stored);
-        // Cap spending at 5% of bank (was 15%) — preserve cash!
-        const maxSpend = Math.floor(bankBalance * 0.05);
-        // Also enforce the bank floor
-        const maxBeforeFloor = Math.max(0, bankBalance - SURVIVAL_BANK_FLOOR);
-        const actualMaxSpend = Math.min(maxSpend, maxBeforeFloor);
-        const canAfford = Math.floor(actualMaxSpend / price * 1000);
-        toBuy = Math.min(needed, canAfford, cap);
+    } else if (stored === 0 && cap > 0 && bankBalance > 20000) {
+      // Rule 2: Tank is EMPTY — emergency mini-buy only if waited 2 hours
+      if (timeSinceEmergency >= EMERGENCY_WAIT) {
+        buyMode = 'EMERGENCY';
+        // Buy only ~2 hours worth of fuel at current consumption rate
+        // Approximate: fleet fuel burn ~50,000 lbs/hour for a large fleet
+        const twoHoursFuel = 100000; // 100K lbs ≈ 2 hours for big fleet
+        const emergencyBudget = Math.min(
+          Math.round(twoHoursFuel * price / 1000), // cost of 100K lbs
+          Math.floor(bankBalance * 0.05),            // max 5% of bank
+          20000                                       // hard cap $20K
+        );
+        toBuy = Math.min(Math.floor(emergencyBudget / price * 1000), cap);
         lastSurvivalBuy = Date.now();
-        log('🚨', 'FUEL', `SURVIVAL BUY: Tank at ${Math.round(tankPct * 100)}%! Spending max $${actualMaxSpend.toLocaleString()} (5% of bank, floor $1M)`);
-
-      } else if (buyMode === 'EMERGENCY') {
-        // EMERGENCY: bank is broke but tank is EMPTY — buy just enough for a few flights
-        // Max spend: $50K or 2% of bank, whichever is less
-        const emergencyBudget = Math.min(50000, Math.floor(bankBalance * 0.02));
-        const canAfford = Math.floor(emergencyBudget / price * 1000);
-        toBuy = Math.min(canAfford, cap);
-        lastSurvivalBuy = Date.now();
-        log('🆘', 'FUEL', `EMERGENCY BUY: Spending max $${emergencyBudget.toLocaleString()} (just enough for a few flights to earn revenue)`);
-      }
-
-      if (toBuy > 10) {
-        log('🛢', 'FUEL', `BUYING ${toBuy.toLocaleString()} lbs at $${price} [${buyMode}]`);
-
-        // ── Try direct XHR first (reliable) ──
-        const xhrResult = await buyFuelDirect(page, toBuy);
-
-        if (xhrResult.ok) {
-          const cost = Math.round(toBuy * price / 1000);
-          log('✅', 'FUEL', `XHR Buy success! ${toBuy.toLocaleString()} lbs for ~$${cost.toLocaleString()}`);
-
-          // Check if response contains error messages
-          if (xhrResult.text.includes('error') || xhrResult.text.includes('fail') || xhrResult.text.includes('insufficient')) {
-            log('⚠️', 'FUEL', `Server said: ${xhrResult.text.slice(0, 200)}`);
-            log('🔄', 'FUEL', 'Falling back to UI buy method...');
-            await buyFuelViaUI(page, toBuy);
-          } else {
-            await tg.fuelBought(toBuy, price, cost);
-          }
-        } else {
-          log('⚠️', 'FUEL', `XHR returned ${xhrResult.status}: ${xhrResult.text.slice(0, 200)}`);
-          log('🔄', 'FUEL', 'Falling back to UI buy method...');
-          await buyFuelViaUI(page, toBuy);
-        }
+        log('🆘', 'FUEL', `EMERGENCY: Tank empty, waited 2hrs, price $${price}. Buying ${toBuy.toLocaleString()} lbs (~2hrs worth, max $${emergencyBudget.toLocaleString()})`);
       } else {
-        log('⚠️', 'FUEL', `Can only afford ${toBuy} lbs — too little to buy`);
+        const minsLeft = Math.round((EMERGENCY_WAIT - timeSinceEmergency) / 60000);
+        log('⏳', 'FUEL', `Tank empty but price $${price} > $${CHEAP_PRICE}. Waiting ${minsLeft}m more for cheap price before emergency buy.`);
       }
     } else {
-      log('ℹ️', 'FUEL', `$${price} > threshold $${FUEL_THRESHOLD} and tank at ${Math.round(tankPct * 100)}% (OK) — waiting for cheaper prices`);
+      log('⏭️', 'FUEL', `Price $${price} > $${CHEAP_PRICE} and tank at ${Math.round(stored/totalCap*100)}% — waiting for cheap price (≤$${CHEAP_PRICE})`);
+    }
+
+    log('📊', 'FUEL', `Mode: ${buyMode} | Price: $${price} | Tank: ${Math.round(stored/(totalCap||1)*100)}% | Bank: $${bankBalance.toLocaleString()}`);
+
+    if (toBuy > 10) {
+      log('🛢', 'FUEL', `BUYING ${toBuy.toLocaleString()} lbs at $${price} [${buyMode}]`);
+
+      // ── Try direct XHR first (reliable) ──
+      const xhrResult = await buyFuelDirect(page, toBuy);
+
+      if (xhrResult.ok) {
+        const cost = Math.round(toBuy * price / 1000);
+        log('✅', 'FUEL', `XHR Buy success! ${toBuy.toLocaleString()} lbs for ~$${cost.toLocaleString()}`);
+
+        // Check if response contains error messages
+        if (xhrResult.text.includes('error') || xhrResult.text.includes('fail') || xhrResult.text.includes('insufficient')) {
+          log('⚠️', 'FUEL', `Server said: ${xhrResult.text.slice(0, 200)}`);
+          log('🔄', 'FUEL', 'Falling back to UI buy method...');
+          await buyFuelViaUI(page, toBuy);
+        } else {
+          await tg.fuelBought(toBuy, price, cost);
+        }
+      } else {
+        log('⚠️', 'FUEL', `XHR returned ${xhrResult.status}: ${xhrResult.text.slice(0, 200)}`);
+        log('🔄', 'FUEL', 'Falling back to UI buy method...');
+        await buyFuelViaUI(page, toBuy);
+      }
+    } else if (buyMode !== 'SKIP') {
+      log('⚠️', 'FUEL', `Can only afford ${toBuy} lbs — too little to buy`);
     }
 
     return price;
