@@ -154,13 +154,9 @@ async function doMaintenance(page) {
           if (detail.onclicks.length > 0) log('🔍','MAINT',`  Onclicks: ${detail.onclicks.join(' | ')}`);
           log('🔍','MAINT',`  Response: ${detail.snippet.slice(0, 200)}`);
           
-          // Step 2: Always attempt repair via UI when details page loads
-          // The details page shows A-Check tab by default — we need to:
-          //   1. Open maintDetails popup
-          //   2. Click "Repair" tab
-          //   3. Click "Plan repair" or "Bulk repair" button
+          // Step 2: Try BOTH tabs (A-check and Repair) for each aircraft
           if (detail.status === 200) {
-            log('🔧','MAINT',`  Opening repair popup for ID ${maintId}...`);
+            log('🔧','MAINT',`  Processing ID ${maintId}...`);
             
             // Open the maintenance details popup in the browser
             await page.evaluate((id) => {
@@ -168,71 +164,62 @@ async function doMaintenance(page) {
             }, parseInt(maintId));
             await sleep(3000);
             
-            // Click the "Repair" tab to switch from A-Check to Repair view
-            const tabResult = await page.evaluate(() => {
-              const pop = document.getElementById('popContent') || document.getElementById('maintAction') || document.body;
-              let tabClicked = false;
-              let allButtons = [];
-              
-              // Find and click the "Repair" tab button
-              pop.querySelectorAll('button, [onclick], .popMenuBtn').forEach(b => {
-                const t = (b.textContent || '').trim().toLowerCase();
-                allButtons.push(t.slice(0, 30));
-                if (t === 'repair' || t === 'repairs') {
-                  b.click();
-                  tabClicked = true;
-                }
-              });
-              
-              return { tabClicked, allButtons };
-            });
-            
-            log('🔍','MAINT',`  Tab click: ${tabResult.tabClicked} | Buttons found: [${tabResult.allButtons.join(', ')}]`);
-            await sleep(4000); // Wait for Ajax content to load after clicking Repair tab
-            
-            // Now scan the repair content area for Plan/Bulk repair buttons
-            const repairClick = await page.evaluate(() => {
-              // Check multiple possible containers where repair content loads
-              const containers = [
-                document.getElementById('maintDetail'),
-                document.getElementById('maintAction'), 
-                document.getElementById('popContent'),
-              ].filter(Boolean);
-              
-              let clicked = 0;
-              let buttonTexts = [];
-              let onclickTexts = [];
-              let htmlSnippet = '';
-              
-              for (const container of containers) {
-                if (htmlSnippet.length === 0) htmlSnippet = container.innerHTML.slice(0, 500);
-                
-                container.querySelectorAll('button, [onclick], a, .btn').forEach(b => {
+            // Try each tab: 'a-check' first, then 'repair'
+            for (const tabName of ['a-check', 'repair']) {
+              // Click the tab
+              const tabClicked = await page.evaluate((tab) => {
+                const pop = document.getElementById('popContent') || document.body;
+                let clicked = false;
+                pop.querySelectorAll('button, [onclick], .popMenuBtn').forEach(b => {
                   const t = (b.textContent || '').trim().toLowerCase();
-                  const oc = (b.getAttribute('onclick') || '').toLowerCase();
-                  
-                  if (t.length > 0 && t.length < 50) buttonTexts.push(t);
-                  if (oc.includes('repair')) onclickTexts.push(oc.slice(0, 100));
-                  
-                  // Click repair-related buttons
-                  if (t.includes('plan repair') || t.includes('bulk repair') || 
-                      t.includes('repair all') || t.includes('schedule repair') ||
-                      (oc.includes('repair') && oc.includes('mode=do'))) {
-                    b.click();
-                    clicked++;
-                  }
+                  if (t === tab || t === tab + 's') { b.click(); clicked = true; }
                 });
-              }
+                return clicked;
+              }, tabName);
               
-              return { clicked, buttonTexts, onclickTexts, htmlSnippet };
-            });
-            
-            if (repairClick.clicked > 0) {
-              log('✅','MAINT',`  Repair triggered! Clicked ${repairClick.clicked} button(s) for ID ${maintId}`);
-            } else {
-              log('🔍','MAINT',`  No repair buttons clicked. Buttons: [${repairClick.buttonTexts.join(', ')}]`);
-              if (repairClick.onclickTexts.length > 0) log('🔍','MAINT',`  Repair onclicks: [${repairClick.onclickTexts.join(' | ')}]`);
-              log('🔍','MAINT',`  Repair HTML: ${repairClick.htmlSnippet.slice(0, 300)}`);
+              if (!tabClicked) continue;
+              await sleep(3000); // Wait for Ajax content
+              
+              // Scan for action buttons in the loaded content
+              const result = await page.evaluate((tab) => {
+                const containers = [
+                  document.getElementById('maintDetail'),
+                  document.getElementById('maintAction'),
+                  document.getElementById('popContent'),
+                ].filter(Boolean);
+                
+                let clicked = 0;
+                let found = [];
+                let htmlSnippet = '';
+                
+                for (const c of containers) {
+                  if (!htmlSnippet) htmlSnippet = c.innerHTML.slice(0, 400);
+                  c.querySelectorAll('button, [onclick], .btn').forEach(b => {
+                    const t = (b.textContent || '').trim().toLowerCase();
+                    const oc = (b.getAttribute('onclick') || '').toLowerCase();
+                    if (t.length > 0 && t.length < 60) found.push(t);
+                    
+                    // Match scheduling/action buttons for both A-check and Repair
+                    const isActionBtn = (
+                      t.includes('plan') || t.includes('schedule') ||
+                      t.includes('perform') || t.includes('do a-check') ||
+                      t.includes('a-check now') || t.includes('bulk') ||
+                      t.includes('repair all') ||
+                      (oc.includes('mode=do') || oc.includes('do_acheck') || oc.includes('do_repair'))
+                    ) && !t.includes('back') && !t.includes('show');
+                    
+                    if (isActionBtn) { b.click(); clicked++; }
+                  });
+                }
+                return { clicked, found, htmlSnippet };
+              }, tabName);
+              
+              if (result.clicked > 0) {
+                log('✅','MAINT',`  [${tabName}] Triggered! Clicked ${result.clicked} button(s) for ID ${maintId}`);
+              } else {
+                log('🔍','MAINT',`  [${tabName}] No action buttons. Found: [${result.found.join(', ')}]`);
+                log('🔍','MAINT',`  [${tabName}] HTML: ${result.htmlSnippet.slice(0, 200)}`);
+              }
             }
           }
           
