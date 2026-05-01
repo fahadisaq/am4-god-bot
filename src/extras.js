@@ -182,35 +182,31 @@ async function doMaintenance(page) {
               
               // Scan for action buttons in the loaded content
               const result = await page.evaluate((tab) => {
-                const containers = [
-                  document.getElementById('maintDetail'),
-                  document.getElementById('maintAction'),
-                  document.getElementById('popContent'),
-                ].filter(Boolean);
+                // ONLY scan #maintDetail — the individual aircraft panel
+                // NOT #popContent which includes the whole popup with all planes listed
+                const detail = document.getElementById('maintDetail');
+                if (!detail) return { clicked: 0, found: [], htmlSnippet: 'no #maintDetail' };
                 
                 let clicked = 0;
                 let found = [];
-                let htmlSnippet = '';
+                const htmlSnippet = detail.innerHTML.slice(0, 400);
                 
-                for (const c of containers) {
-                  if (!htmlSnippet) htmlSnippet = c.innerHTML.slice(0, 400);
-                  c.querySelectorAll('button, [onclick], .btn').forEach(b => {
-                    const t = (b.textContent || '').trim().toLowerCase();
-                    const oc = (b.getAttribute('onclick') || '').toLowerCase();
-                    if (t.length > 0 && t.length < 60) found.push(t);
-                    
-                    // Match scheduling/action buttons for both A-check and Repair
-                    const isActionBtn = (
-                      t.includes('plan') || t.includes('schedule') ||
-                      t.includes('perform') || t.includes('do a-check') ||
-                      t.includes('a-check now') || t.includes('bulk') ||
-                      t.includes('repair all') ||
-                      (oc.includes('mode=do') || oc.includes('do_acheck') || oc.includes('do_repair'))
-                    ) && !t.includes('back') && !t.includes('show');
-                    
-                    if (isActionBtn) { b.click(); clicked++; }
-                  });
-                }
+                detail.querySelectorAll('button, [onclick], .btn').forEach(b => {
+                  const t = (b.textContent || '').trim().toLowerCase();
+                  const oc = (b.getAttribute('onclick') || '').toLowerCase();
+                  if (t.length > 0 && t.length < 60) found.push(t);
+                  
+                  // Only match specific action keywords — NOT generic "plan" which is too broad
+                  const isActionBtn = (
+                    t.includes('plan a-check') || t.includes('do a-check') ||
+                    t.includes('a-check now') || t.includes('schedule a-check') ||
+                    t.includes('plan repair') || t.includes('bulk repair') ||
+                    t.includes('repair now') || t.includes('schedule repair') ||
+                    oc.includes('do_acheck') || oc.includes('do_repair')
+                  ) && !t.includes('back');
+                  
+                  if (isActionBtn && clicked === 0) { b.click(); clicked++; } // Only click FIRST match
+                });
                 return { clicked, found, htmlSnippet };
               }, tabName);
               
