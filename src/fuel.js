@@ -188,12 +188,13 @@ async function checkFuel(page, bankBalance) {
     if (price <= CHEAP_PRICE && cap > 0) {
       // Rule 1: Cheap fuel — buy in bulk (max 30% of bank)
       buyMode = 'BULK';
-      const maxSpend = Math.min(
-        Math.floor(bankBalance * 0.30),          // 30% of bank max
-        Math.max(0, bankBalance - MIN_BANK_BALANCE) // keep $500K reserve
-      );
-      toBuy = Math.min(Math.floor(maxSpend / price * 1000), cap);
-      log('💰', 'FUEL', `CHEAP PRICE $${price} ≤ $${CHEAP_PRICE}! Buying ${toBuy.toLocaleString()} lbs (spending $${Math.round(toBuy*price/1000).toLocaleString()})`);
+      // Cheap price — fill the WHOLE tank (cap = remaining capacity)
+      const fullTankCost = Math.round(cap * price / 1000);
+      const canAffordFull = bankBalance - MIN_BANK_BALANCE >= fullTankCost;
+      toBuy = canAffordFull ? cap : Math.floor((bankBalance - MIN_BANK_BALANCE) / price * 1000);
+      toBuy = Math.max(0, Math.min(toBuy, cap));
+      const spend = Math.round(toBuy * price / 1000);
+      log('💰', 'FUEL', `CHEAP PRICE $${price} ≤ $${CHEAP_PRICE}! FILLING FULL TANK — ${toBuy.toLocaleString()} lbs for $${spend.toLocaleString()}`);
 
     } else if (stored === 0 && cap > 0 && bankBalance > 20000) {
       // Rule 2: Tank is EMPTY — emergency mini-buy only if waited 2 hours
